@@ -60,3 +60,21 @@ LED_LABELS = {
 
 def led_label(v):
     return LED_LABELS.get(v, f'0x{v:08x} (unknown; only 0-3 are accepted)')
+
+
+# syAP (product ID) -> model, from the AirPort wiki's ACP-properties page. 115 is the only one
+# airportctl has been run against.
+PRODUCTS = {
+    102: 'AirPort Express (802.11g, 1st gen)',
+    104: 'AirPort Extreme 802.11n (Fast Ethernet)',
+    105: 'AirPort Extreme 802.11n (Gigabit Ethernet)',
+    115: 'AirPort Express 2nd generation (A1392)',
+    120: 'AirPort Extreme 802.11ac (6th gen)',
+}
+
+# (syAP, syVs) combinations verified end to end; see "Compatibility" in ../README.md.
+TESTED = {(115, '7.8.1')}
+
+
+def product_label(v):
+    return PRODUCTS.get(v, f'unknown product {v}')

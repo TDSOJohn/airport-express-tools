@@ -1,0 +1,58 @@
+name: Device report
+description: Tried airportctl on a base station? Tell us what worked, especially on a model or firmware not in the compatibility table.
+title: "[device] <model>, firmware <version>"
+labels: [device-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Reports from other models and firmware versions are how the compatibility table grows.
+
+        **Don't paste backup files (`.cfb`) or raw `WiFi` blobs.** They contain your Wi-Fi key (the WPA PMK).
+        `wifi show` output is fine: it doesn't print the key.
+  - type: textarea
+    id: info
+    attributes:
+      label: Output of `airportctl info`
+      description: Model (`syAP`) and firmware (`syVs`). You can remove the name line.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model / A-number
+      description: Printed on the underside, e.g. "AirPort Express 2nd gen, A1392".
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Your OS and Python version
+      placeholder: e.g. Debian 13, Python 3.13
+  - type: checkboxes
+    id: worked
+    attributes:
+      label: What worked
+      description: Tick only what you actually ran and checked.
+      options:
+        - label: "`wifi show`"
+        - label: "`mode show`"
+        - label: "`led`"
+        - label: "`name`"
+        - label: "`wifi ssid`"
+        - label: "`wifi secure wpa2` (clients could connect after the reboot)"
+        - label: "`wifi hidden`"
+        - label: "`wifi backup` / `wifi restore`"
+        - label: "`admin-password`"
+        - label: "`crossdev/wpa-build/join-test.sh` (joined another network)"
+  - type: textarea
+    id: failed
+    attributes:
+      label: What failed or looked wrong
+      description: The command and its full output. Remove SSIDs or MAC addresses if you like.
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
