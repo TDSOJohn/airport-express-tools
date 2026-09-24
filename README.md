@@ -50,7 +50,13 @@ ports:
 * **Soft reset:** with the Express powered on, hold the button for **1 second**; the light flashes
   amber. For 5 minutes it accepts configuration without the admin password (and with Access
   Control off); if nothing is changed in that time, it goes back to its old settings. This is
-  AirPort Utility's recovery path; it hasn't been tried with airportctl.
+  AirPort Utility's recovery path, and it works with airportctl too: during the window the admin
+  auth check (`FUN_006768c0`) accepts the literal password `public` in place of the stored `syPW`,
+  so `python3 -m airportctl -p public admin-password …` sets a new password. Confirmed on hardware
+  (2026-09-24): `-p public` was rejected before the button and accepted after, on the same boot,
+  and reverted on its own after the window. The stored password is never read during the window,
+  so a device on an untrusted network briefly trusts `public` — only soft-reset on a cable you
+  control.
 * **Hard reset:** with the Express powered on, hold the button for **about 5 seconds**, until the
   light flashes amber rapidly. It restarts unconfigured but keeps the last saved configuration.
 * **Factory reset:** unplug it, hold the button, plug it back in and keep holding for **about
@@ -122,7 +128,7 @@ the build and the kernel ABI table are in [crossdev/wpa-build/](crossdev/wpa-bui
 | path | what |
 |---|---|
 | `airportctl/` | the CLI: `wifi show/ssid/secure/hidden/join/backup/restore`, `mode`, `rpc`, `led`, `name`, `info`, `reboot`. Python 3 stdlib only. See its [README](airportctl/README.md). |
-| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
+| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
 | `ghidra_scripts/` | headless Ghidra scripts that produced those docs, incl. `NameFuncs.java` which recovers ~2310 function names ([README](ghidra_scripts/README.md)) |
 | `tools/` | `find_express.py`, `proptab.py` (dump the 520-entry ACP property table), `essh.sh` (debug shell), `mdns_probe.py`, `wait_for_reboot.py`, `pcap_summary.py` |
 | `crossdev/` | cross-compile and run your own C on the device (NetBSD 4.0, mipseb) — see its [README](crossdev/README.md) |

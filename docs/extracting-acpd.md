@@ -27,7 +27,10 @@ instead, `python3 tools/find_express.py` sweeps the subnet and the ARP table for
 
 ## 2. Enable the debug shell
 
-ACPd exposes a root shell over SSH when the `dbug` property has bit `0x1000`/`0x2000` set:
+ACPd starts `sshd` (root login, admin password) whenever the `dbug` property has bit
+`0x200` **clear**. `0x3000` is the value the community uses; it works because `0x3000 &
+0x200 == 0` (the `0x1000`/`0x2000` bits themselves only suppress iperf — see
+[dbug](dbug.md) for the full bitfield):
 
 ```sh
 python3 - <<'EOF'
@@ -45,7 +48,9 @@ AIRPORT_PW=public tools/essh.sh 'uname -a'
 ```
 
 `essh.sh` re-enables the legacy KEX/ciphers that OpenSSH now refuses by default — the Express
-runs a 2007-era SSH server. **Turn the shell back off when you are done** (`dbug` = 0 + reboot).
+runs a 2007-era SSH server. **Turn the shell back off when you are done** — set `dbug` to a
+value with bit `0x200` *set* and reboot (e.g. `0x3200`). Note `dbug = 0` does **not** turn SSH
+off: `0` also leaves `0x200` clear, so `sshd` keeps running (and iperf comes back).
 
 ## 3. Copy the binary out
 
