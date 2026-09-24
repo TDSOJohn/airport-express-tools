@@ -1,0 +1,29 @@
+# --- Apple firmware and anything derived from it: never commit ---
+ACPd.bin
+ACPd*.bin
+ACPd.strings
+ACPd.asm
+*.img
+*.basebinary
+ghidra_project/
+ghidra_*_PUBLIC/
+decomp/
+func_names.txt
+rpc_map.txt
+device_dump/
+
+# --- your base station's own configuration and secrets ---
+backups/
+*.cfb
+.airport_known_hosts
+*.wifipw
+
+# --- cross-compiler working files (see crossdev/setup.sh) ---
+crossdev/sysroot/
+crossdev/dl/
+crossdev/build/
+
+__pycache__/
+*.pyc
+crossdev/wpa-build/wpa_supplicant-*/
+crossdev/wpa-build/compat/libc/*.o

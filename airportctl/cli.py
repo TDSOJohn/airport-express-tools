@@ -369,7 +369,7 @@ def cmd_mode_sharing(args):
     if args.choice != 'nat':
         print('!! in bridge/dhcp mode the Express stops being the DHCP router at 10.0.1.1.\n'
               '   Over the cable it will fall back to a link-local address - find it again with\n'
-              '   `python3 find_express.py` or run a DHCP server on enp5s0 before rebooting it.')
+              '   `python3 tools/find_express.py` or run a DHCP server on that cable before rebooting it.')
     if args.dry_run:
         print('dry run, nothing written')
         return

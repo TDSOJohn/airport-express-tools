@@ -30,7 +30,8 @@ def run(*cmd):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--host', default='10.0.1.1')
-    ap.add_argument('--iface', default='enp5s0')
+    ap.add_argument('--iface', help="interface wired to the Express (default: the profile's "
+                                    'connection.interface-name)')
     ap.add_argument('--profile', default='airport-probe', help='NetworkManager profile on IFACE')
     ap.add_argument('--password', default=os.environ.get('AIRPORT_PASSWORD') or acp.default_password(),
                     help='admin password or @FILE (default: $AIRPORT_PASSWORD, else as airportctl -p)')
@@ -39,6 +40,11 @@ def main():
     ap.add_argument('--expect-security', help="text every radio's scan SECURITY column should contain, e.g. WPA2")
     args = ap.parse_args()
     password = acp.read_password(args.password)
+    if not args.iface:
+        args.iface = run('nmcli', '-g', 'connection.interface-name', 'connection', 'show',
+                         args.profile).strip()
+        if not args.iface:
+            sys.exit(f'profile {args.profile!r} is not bound to an interface: pass --iface')
 
     def carrier():
         try:

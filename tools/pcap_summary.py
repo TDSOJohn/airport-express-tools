@@ -2,7 +2,7 @@
 """Summarize a libpcap (Ethernet) capture without tshark: ARP, DHCP, mDNS, ICMP/ICMPv6, TCP/UDP.
 
 Capture without root via the wireshark group, e.g.:
-  dumpcap -q -i enp5s0 -a duration:30 -F pcap -w capture.pcap
+  dumpcap -q -i IFACE -a duration:30 -F pcap -w capture.pcap
 
 usage: pcap_summary.py FILE.pcap
 """

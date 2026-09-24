@@ -86,7 +86,7 @@ factory sample `backup-WiFi-factory.cfb`.
 ## Verified on-device (A1392, firmware 7.8.1)
 AirPort Utility never discovers this unit (Bonjour discovery is the broken piece), so we
 verified directly over ACP/SSH instead:
-1. Laptop `enp5s0` → Express **LAN** port; `nmcli c up airport-probe` (never-default DHCP,
+1. Laptop Ethernet → Express **LAN** port; `nmcli c up airport-probe` (never-default DHCP,
    got 10.0.1.2, the laptop's own default route untouched). Reading the `WiFi` property
    showed both radios `raWM=0` (open); every flat `ra**` prop returned error `0xffffe58c`
    (deleted) — proving the blob is authoritative.

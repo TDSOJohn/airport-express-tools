@@ -9,4 +9,4 @@ A small, safety-first CLI built on the reverse-engineering in ../docs/:
 
 Run:  python3 -m airportctl ...   (or ./airportctl ... from this folder)
 """
-__version__ = '1.0'
+__version__ = '0.1.0'

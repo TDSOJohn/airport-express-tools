@@ -5,7 +5,7 @@ Sweeps the given IPv4 /24, reads the ARP table for Apple's 20:c9:d0 MAC prefix (
 Ethernet/radio OUI), and confirms each candidate by reading its ACP syNm. Also tries Avahi
 (_airport._tcp) if avahi-browse is present. Prints the Express's IP and name, or times out.
 
-usage: find_express.py [--net 192.168.1] [--iface wlp3s0] [--timeout 180] [--password PW|@FILE]
+usage: find_express.py [--net 192.168.1] [--timeout 180] [--password PW|@FILE]
 """
 import argparse
 import concurrent.futures
@@ -64,7 +64,6 @@ def confirms(ip, password):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--net', default='192.168.1')
-    ap.add_argument('--iface', default='wlp3s0')
     ap.add_argument('--timeout', type=int, default=180)
     ap.add_argument('--password', default=acp.default_password(),
                     help='admin password or @FILE (default: as airportctl -p)')
