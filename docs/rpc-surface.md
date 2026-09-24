@@ -18,11 +18,15 @@ airportctl rpc wifi.scan.results.wlan1   # read-only calls need no --force; inpu
 
 ## Two registries, 87 names
 
-`acprpc.show` prints the daemon's live registry. On the test unit it listed **87** RPCs,
-from two sources:
+`acprpc.show` prints the daemon's live registry. The firmware has **87** distinct RPC names
+(the per-interface set counted once). How many are registered at a time depends on the
+state: **107** on the test unit as a normal two-radio access point, 85 in the join-test
+state below. They come from two sources:
 
 * **ACPd's own** — registrar `FUN_006717dc`, listed with flags `0x0`/`0x1`. 55 names;
-  the regenerated map is `re/rpc_map.txt`.
+  the regenerated map is `re/rpc_map.txt`. 54 were live in both states: all but
+  `pppoe.test-client.check-connection`, which is presumably registered only with PPPoE
+  configured.
 * **Registered by other daemons over IPC** — registrar `FUN_0080b058`, listed with flags
   `0x2`. ACPd forwards the call to the process that registered the name:
 
@@ -39,11 +43,13 @@ from two sources:
   schemas in `airportctl/rpc.py` were resolved by hand from `FUN_005b44fc` (hostapd) and
   `FUN_005cbf48` (Apple's wpa_supplicant, which registers a similar set in client mode).
 
-Per-interface names only exist while that interface's hostapd is running. In the test
-state (the replacement supplicant from [join-mode.md](join-mode.md) on `wlan2`, `wlan0`'s
-hostapd killed) only `wlan1` was registered. `wifi.statistics.wlan0` failed as unknown,
-even though `acpd.system.show` still listed `wlan0`. ACPd's own view goes stale when
-something outside it changes the interfaces.
+Per-interface names only exist while that interface's hostapd is running. As a normal
+access point both radios' sets were registered: 53 remote names = 22 for `wlan0` + 22 for
+`wlan1` + the 9 from dhcpd, dhclient, mDNSResponder and iCloudd (`dhcp6.client.interface.state`
+was absent, no DHCPv6 on the WAN). In the join-test state (the replacement supplicant from
+[join-mode.md](join-mode.md) on `wlan2`, `wlan0` destroyed) only `wlan1`'s set was there.
+`wifi.statistics.wlan0` failed as unknown, even though `acpd.system.show` still listed
+`wlan0`: ACPd's own view goes stale when something outside it changes the interfaces.
 
 ## Wire behaviour, as observed
 
@@ -51,7 +57,7 @@ something outside it changes the interfaces.
   error `0xffffe5b9` = −6727 (`kNotFoundErr`) and no body. `acpmon.show` with no `cmd`
   fails like this; with `cmd: ""` it works.
 * **Handler errors** come back in the body instead: `{'outputs': {}, 'status': -6727}`
-  (`acpd.system.interfaces` on this unit).
+  (`acpd.system.interfaces` in the join-test state).
 * **Negative integers are 8-byte signed CFL ints** (RSSI −52, `txrate` −1, status −6727).
   1/2/4-byte ints are unsigned, as in Apple's bplist. `cfl.py` decoded all ints as
   unsigned before this was found.
@@ -71,18 +77,18 @@ yourself injects a fake event. **write** = changes live or stored settings.
 |---|---|---|
 | `acprpc.show` | `cmd` → `output` | the live registry (name, flags, `BUSY` while it runs) |
 | `acpmon.show` | `cmd` → `output` | ACP monitoring sessions (kqueue fds, session list) |
-| `acpd.system.show` | → `output` | ~6 KB text dump of ACPd's system object: role ("DHCP/NAT via 802.3"), flag word decoded (NAT, DHCP, IPv6 modes, BTMM, `last cfg time` = `ctim`), each Ethernet PHY with link state and WAN/LAN role, radios (`ath0` ch 6 mode 6, `ath1` ch 132 mode 5), VAPs with SSID/MAC, bridge members, LAN address and DHCP range |
-| `acpd.system.interfaces` | → `data` | the configuration option ("DHCP/NAT via Ethernet", …) plus WAN/LAN/Protected WAN/Guest interface details; returned status −6727 on this unit (cause not traced; the WAN port was unplugged) |
+| `acpd.system.show` | → `output` | ~6 KB text dump of ACPd's system object: role ("DHCP/NAT via 802.3"), flag word decoded (NAT, DHCP, IPv6 modes, BTMM, `last cfg time` = `ctim`), each Ethernet PHY with link state and WAN/LAN role, radios with channel and mode (`ath0` mode 6, `ath1` mode 5; the channels moved from 6/132 to 1/108 across a reboot, both radios on auto), VAPs with SSID/MAC, bridge members, LAN address and DHCP range |
+| `acpd.system.interfaces` | → `data` | **the interface tree**: `config` ("DHCP/NAT via Ethernet"), `WAN` (name, MAC, IPv4/IPv6 addresses), `LAN` = `bridge0` with its members: the Ethernet port with its ARP `Cache` and `SwitchCache` (MACs seen per switch port), and each VAP with `SSID`, `BSSID`, `Channel` ("108, ht20/ht40"), `PHY` ("802.11a/n"), `opmode`, `clients` and its parent radio (`ath0`/`ath1`). Works as a normal AP; returned status −6727 in the join-test state, most likely because ACPd's list still held the destroyed `wlan0` (the WAN port was unplugged in both states, so that isn't it) |
 | `acp.getStaticConfig` | `variables`(dict, default `{}`) → `variables` | **the boot environment**: `apple-sn` (serial), `ethaddr`, `apple-sku` (`ETSI` = EU regulatory domain), `apple-minver`, `radio-cal-ath0/1` (calibration blobs). Pass `{name: ...}` keys to read single variables |
 | `wifi.interface.stats.get` | → `data` | net80211 counters per VAP, zeros omitted (`rx_beacon`, `rx_mgmt`, `rx_ssidmismatch`, `tx_badstate`, …) |
 | `wifi.chain.noise.get` | `index` → `data` | per-chain noise floor for radio *index*: `factory-cal-nf`, `median-pwr`, `uncal-nf`, control/extension channel (e.g. −97/−96 dBm) |
 | `wifi.antenna.config.get` | `index` → `rxant`, `txant` | **a stub**: the handler validates `index` and never writes the outputs; always 0/0 |
-| `wifi.channel.get.<if>` | `interface` → `channel` | 132 on `wlan1` |
-| `wifi.mcs.get.<if>` | `interface` → `mcsindex` | 127 (presumably auto) |
-| `wifi.tx.rate.get.<if>` | `interface` → `txrate` | −1 (presumably auto) |
-| `wifi.mcast.rate.get.<if>` | `interface` → `rate` | 6 (Mb/s) |
+| `wifi.channel.get.<if>` | `interface` → `channel` | 1 on `wlan0` (2.4 GHz), 108 on `wlan1` (5 GHz) |
+| `wifi.mcs.get.<if>` | `interface` → `mcsindex` | 127 on both radios (presumably auto) |
+| `wifi.tx.rate.get.<if>` | `interface` → `txrate` | −1 on both radios (presumably auto) |
+| `wifi.mcast.rate.get.<if>` | `interface` → `rate` | 2 on `wlan0`, 6 on `wlan1` (Mb/s) |
 | `wifi.statistics.<if>` | `interface` → `data` | `{wlan1: [...]}`: one entry per associated station; empty with no clients |
-| `wifi.scan.results.<if>` | `interface` → `data` | **the base station's own site survey**, with decoded IEs: `SSID_STR`, `BSSID`, `CHANNEL`, `RSSI`, `NOISE`, `RATES`, `CAPABILITIES`, `RSN_IE` (ciphers/AKMs), `HT_CAPS_IE`, `80211D_IE` (country, per-band max power), raw `IE`. 8 networks on the 5 GHz radio here |
+| `wifi.scan.results.<if>` | `interface` → `data` | **the base station's own site survey**, with decoded IEs: `SSID_STR`, `BSSID`, `CHANNEL`, `RSSI`, `NOISE`, `RATES`, `CAPABILITIES`, `RSN_IE` (ciphers/AKMs), `HT_CAPS_IE`, `80211D_IE` (country, per-band max power), raw `IE`. As an AP: 31 networks on channels 1–13 from `wlan0`, 9 on 5 GHz from `wlan1` |
 | `dhcp.server.leases.get` | `pool` → `data` | `{leases: [{ipAddress, macAddress, hostname, interface, pool, leaseEnds, leaseEndsTime}]}`; `pool` is one of `all active free expired abandoned backup` |
 
 Trimmed samples (identifiers replaced):
