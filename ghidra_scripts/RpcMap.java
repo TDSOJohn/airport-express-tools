@@ -76,6 +76,8 @@ public class RpcMap extends GhidraScript {
     static final String[] CALLER_SAVED = {"at", "v0", "v1", "a0", "a1", "a2", "a3",
         "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "ra"};
 
+    static final Set<String> STORES = new HashSet<>(Arrays.asList("sb", "sh", "swl", "swr"));
+
     /** a call destroys v0-v1/a0-a3/t0-t9 but NOT s0-s8/gp - the schema constants live in those. */
     private void clobber(Map<String, Long> regs, Map<String, Long> hi) {
         for (String r : CALLER_SAVED) { regs.remove(r); hi.remove(r); }
@@ -182,6 +184,7 @@ public class RpcMap extends GhidraScript {
             }
             return;
         }
+        if (STORES.contains(m)) return;   // operand 0 of a store is read, not written
         if (d != null && !m.startsWith("b") && !m.startsWith("j") && !m.equals("nop")) {
             boolean allZero = ins.getNumOperands() > 1;
             for (int i = 1; i < ins.getNumOperands(); i++) {

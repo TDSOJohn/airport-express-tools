@@ -25,7 +25,7 @@ Script output arrives on stdout as `INFO  <Script>.java> …` lines; filter with
 | **ImmScan** | `0xIMM…` | Finds 32-bit immediates, including MIPS `lui`+`ori`/`addiu` pairs — this is how you find fourcc constants like `0x6374696d` (`ctim`). |
 | **FindStr** | `str…` | Byte-sequence search, reporting VMA and containing function. |
 | **DumpStr** | `0xADDR` or `0xSTART-0xEND` | Prints C strings in a range (handy for walking a string table). |
-| **RpcMap** | `0x6717dc [outfile]` | Every ACP RPC registration: name, flags, handler and the parameter schema. Reconstructs o32 arguments (a0-a3 + the outgoing stack area) at each call site. Produced [../docs/rpc-surface.md](../docs/rpc-surface.md). |
+| **RpcMap** | `0x6717dc [outfile]` (ACPd's own) or `0x80b058` (other daemons') | Every ACP RPC registration: name, flags, handler and the parameter schema. Reconstructs o32 arguments (a0-a3 + the outgoing stack area) at each call site. Produced [../docs/rpc-surface.md](../docs/rpc-surface.md). |
 | **DumpIns** | `0xSTART 0xEND` | Mnemonic, operand count and resolved operand objects per instruction — for when Ghidra's rendering surprises you (`addu rd,zero,zero` prints as `clear rd`; delay-slot instructions get a `_` prefix). |
 | **FindStore** | `0xOFFSET [imm]` | Every `sw`/`sh`/`sb` at a given struct offset, optionally only where the stored register was just loaded with `imm`. Used to trace who writes `ctx+0x24`. |
 | **Recon** | — | First-pass overview of the program. |

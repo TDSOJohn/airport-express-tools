@@ -211,11 +211,11 @@ def cmd_led(args):
 
 def cmd_rpc(args):
     if args.list:
-        for name in sorted(rpcmod.RPCS):
+        for name in sorted(rpcmod.ALL_RPCS):
             mark = ' ' if name in rpcmod.READ_ONLY else '*'
             print(f'{mark} {rpcmod.describe(name)}')
-        print('\n* = not read-only: takes inputs and/or changes state. '
-              'See docs/rpc-surface.md.')
+        print('\n* = not verified read-only: may act or change state. `.<if>` = one per '
+              'interface (e.g. wlan1). See docs/rpc-surface.md.')
         return
     if not args.name:
         raise SystemExit('rpc: give an RPC name, or --list')
@@ -227,9 +227,12 @@ def cmd_rpc(args):
             inputs[k] = bytes.fromhex(v[4:].replace(':', ''))
     known = rpcmod.describe(args.name)
     print(known or f'{args.name}  (not in the static map)')
-    if args.name not in rpcmod.READ_ONLY and not args.force:
-        raise SystemExit('refusing: this RPC takes input parameters and may change the base '
+    key, _ = rpcmod.lookup(args.name)
+    if key not in rpcmod.READ_ONLY and not args.force:
+        raise SystemExit('refusing: this RPC is not verified read-only and may change the base '
                          "station's state. Re-run with --force if that is what you want.")
+    if key in rpcmod.READ_ONLY:
+        inputs = {**rpcmod.default_inputs(args.name), **inputs}
     print(f'calling with inputs={inputs!r}')
     if args.dry_run:
         print('dry run, nothing sent')
@@ -511,7 +514,7 @@ def build_parser():
     sp.add_argument('--list', action='store_true', help='print the statically mapped RPC surface')
     sp.add_argument('--json', metavar='JSON', help='inputs as a JSON object; a "hex:.." string '
                                                    'value is sent as raw bytes')
-    sp.add_argument('--force', action='store_true', help='allow RPCs that take inputs')
+    sp.add_argument('--force', action='store_true', help='allow RPCs not verified read-only')
     sp.add_argument('--dry-run', action='store_true')
     sp.set_defaults(func=cmd_rpc)
 

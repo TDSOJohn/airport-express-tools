@@ -33,8 +33,8 @@ mode show                                  the join gate: ctim, waCV, sharing pr
 mode ctim [now|N]                          store the configuration timestamp (opens the gate)
 mode sharing nat|dhcp|bridge               connection sharing (raNA/raDS/raWB)
 mode wan wired|wireless|show               waCV WAN-uplink bit (only if role 6 shows up)
-rpc --list                                 the 56 mapped ACP RPCs and their signatures
-rpc NAME [--json '{..}'] [--force]         call one (see ../docs/rpc-surface.md)
+rpc --list                                 the 87 mapped ACP RPCs; unmarked = verified read-only
+rpc NAME [--json '{..}'] [--force]         call one; read-only ones need no inputs or --force
 led  [show|auto|amber|green|N]             front status LED (LEDc): live, no reboot
 name  BASE-STATION-NAME                    set base station name (syNm)
 admin-password [PW|@FILE]                  change the admin password (syPW); prompts if omitted.

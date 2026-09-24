@@ -13,8 +13,10 @@ def _pack(obj):
     if isinstance(obj, bool):
         return b'\x09' if obj else b'\x08'
     if isinstance(obj, int):
-        if obj < 0:
-            raise ValueError(f'negative int not supported: {obj}')
+        if obj < 0:                     # like bplist: only the 8-byte form is signed
+            if obj < -(1 << 63):
+                raise ValueError(f'int too small: {obj}')
+            return b'\x13' + struct.pack('>q', obj)
         for exp, fmt in enumerate(('>B', '>H', '>I', '>Q')):
             if obj < (1 << (8 << exp)):
                 return bytes([0x10 + exp]) + struct.pack(fmt, obj)
@@ -42,7 +44,8 @@ def _unpack(data, i):
             return {0: None, 8: False, 9: True}[info], i
     elif kind == 0x10:
         size = 1 << info
-        return int.from_bytes(data[i:i + size], 'big'), i + size
+        # 1/2/4-byte ints are unsigned, 8-byte ones signed (ACPd sends -52 dBm, -6727 so)
+        return int.from_bytes(data[i:i + size], 'big', signed=size == 8), i + size
     elif kind == 0x20:
         size = 1 << info
         return struct.unpack('>f' if size == 4 else '>d', data[i:i + size])[0], i + size

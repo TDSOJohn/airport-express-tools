@@ -122,7 +122,7 @@ the build and the kernel ABI table are in [crossdev/wpa-build/](crossdev/wpa-bui
 | path | what |
 |---|---|
 | `airportctl/` | the CLI: `wifi show/ssid/secure/hidden/join/backup/restore`, `mode`, `rpc`, `led`, `name`, `info`, `reboot`. Python 3 stdlib only. See its [README](airportctl/README.md). |
-| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 56 RPCs), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
+| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
 | `ghidra_scripts/` | headless Ghidra scripts that produced those docs, incl. `NameFuncs.java` which recovers ~2310 function names ([README](ghidra_scripts/README.md)) |
 | `tools/` | `find_express.py`, `proptab.py` (dump the 520-entry ACP property table), `essh.sh` (debug shell), `mdns_probe.py`, `wait_for_reboot.py`, `pcap_summary.py` |
 | `crossdev/` | cross-compile and run your own C on the device (NetBSD 4.0, mipseb) — see its [README](crossdev/README.md) |
@@ -209,7 +209,7 @@ What this repo adds: how the `WiFi` blob's security fields actually work (settin
 means writing an SSID-salted PMK, not the legacy properties), the client-mode gate and the
 firmware supplicant crash behind "join a wireless network", a working replacement supplicant, a
 cross-compiling setup for the device's NetBSD 4.0/MIPS userland, the front LED, and a map of all
-56 ACP RPCs.
+87 ACP RPCs, classified from their handlers, with the read-only ones called on a live unit.
 
 Built on:
 
