@@ -124,8 +124,9 @@ accept 7.6.2 or newer but refuse a downgrade past that floor.
 Net effect: a correctly-formed `APPLE-FIRMWARE` image with a valid checksum and a
 version ≥ `apple-minver` is accepted by ACPd, written to a bank, and booted by CFE — no
 key required. That is the answer to "can it run custom code permanently?": **yes, there
-is no cryptographic barrier**, only a format/checksum/version gate. (This is also the
-central finding for the security write-up — see the project TODO's R6.)
+is no cryptographic barrier**, only a format/checksum/version gate. (This is the
+*local* flash/boot path; Apple's OTA update feed is separately signature-checked at the
+catalog layer. Both, and how they fit the wider threat model, are in [security.md](security.md).)
 
 ## The firmware image format
 
@@ -134,13 +135,16 @@ From `FUN_00807cec` (the parser) and `FUN_00699a84` (the writer):
 | offset | bytes | meaning |
 |---|---|---|
 | `0x00` | 14 | magic `APPLE-FIRMWARE` (else the update is rejected, `-20`) |
-| `0x10` | 4 | image type — must be `0x00000073` for a bank image |
-| `0x14` | 4 | version / flags word |
-| `0x18`,`0x0f` | — | version fields (compared against `minS`) |
-| `0x1b` | 1 | flag byte; bit `0x04` required to target the **bootloader** |
-| `0x1c` | 4 | length field |
-| `0x20` | … | payload (the gzip'd bank, or a bootloader image) |
-| end −4 | 4 | Adler-32/CRC checksum over the payload (verified → else `-6`) |
+| `0x10` | 4 | model ID — `0x73` = **115** = A1392 (the image must match the device model) |
+| `0x14` | 4 | version (compared against `minS`) |
+| `0x18`,`0x0f` | — | build fields |
+| `0x1b` | 1 | flag byte; bit `0x02` = payload **encrypted**, bit `0x04` = target the **bootloader** |
+| `0x1c` | 4 | reserved |
+| `0x20` | … | payload — the next container, or (innermost) an **AES-encrypted, gzip'd** bank, or a bootloader image |
+| end −4 | 4 | Adler-32 over `header+payload` (verified → else `-6`) — the only integrity check |
+
+A distributed `.basebinary` nests two of these containers, with the inner payload
+AES-encrypted; how to peel and decrypt it on a PC is in **[firmware.md](firmware.md)**.
 
 The writer's target selector chooses the destination: **1 → `flash0` (bank A)**,
 **2 → `flash1` (bank B)**, **3 → `flash4` (the bootloader itself)**. A bank image must be
@@ -235,8 +239,9 @@ five partitions, the device is effectively unbrickable.
 * The real early **boot log**: the `dmesg` ring buffer rolls over to Wi-Fi/DFS runtime
   messages within minutes, so the flash-probe and CFE hand-off lines are gone unless
   captured over the serial console or right after a reboot.
-* Diffing a 7.8.1 vs 7.6.2 `.basebinary` on a PC to see what Apple changed (a separate
-  research thread).
+* ~~Diffing a 7.8.1 vs 7.6.2 `.basebinary` on a PC to see what Apple changed~~ — **done**,
+  in [firmware.md](firmware.md) (7.8.1 added the AirPlay 2 receiver; the TLS stack stayed
+  at 2007).
 
 Hardware details and their sources (the two teardowns) are in [hardware.md](hardware.md).
 The partition sizes, the boot/verification behaviour, the image format, the CFE nvram
