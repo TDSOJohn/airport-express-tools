@@ -1,0 +1,14 @@
+#!/bin/sh
+# Convenience launcher so `./airportctl-run ...` (or a symlink to it on PATH) works from anywhere.
+# Resolve the symlink chain so PYTHONPATH points at the folder that really holds the package;
+# each relative link resolves against ITS OWN directory, not the original argv[0]'s.
+self="$0"
+while [ -L "$self" ]; do
+    target="$(readlink "$self")"
+    case "$target" in
+        /*) self="$target" ;;
+        *)  self="$(dirname "$self")/$target" ;;
+    esac
+done
+d="$(cd "$(dirname "$self")" && pwd)" || { echo "airportctl: cannot locate the package" >&2; exit 1; }
+exec env PYTHONPATH="$d${PYTHONPATH:+:$PYTHONPATH}" python3 -m airportctl "$@"
