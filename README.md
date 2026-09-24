@@ -128,7 +128,7 @@ the build and the kernel ABI table are in [crossdev/wpa-build/](crossdev/wpa-bui
 | path | what |
 |---|---|
 | `airportctl/` | the CLI: `wifi show/ssid/secure/hidden/join/backup/restore`, `mode`, `rpc`, `led`, `name`, `info`, `reboot`. Python 3 stdlib only. See its [README](airportctl/README.md). |
-| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
+| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [properties](docs/properties.md) (the full 520-property dictionary, each read live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
 | `ghidra_scripts/` | headless Ghidra scripts that produced those docs, incl. `NameFuncs.java` which recovers ~2310 function names ([README](ghidra_scripts/README.md)) |
 | `tools/` | `find_express.py`, `proptab.py` (dump the 520-entry ACP property table), `essh.sh` (debug shell), `mdns_probe.py`, `wait_for_reboot.py`, `pcap_summary.py` |
 | `crossdev/` | cross-compile and run your own C on the device (NetBSD 4.0, mipseb) — see its [README](crossdev/README.md) |
