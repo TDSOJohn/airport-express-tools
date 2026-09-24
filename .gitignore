@@ -27,3 +27,8 @@ __pycache__/
 *.pyc
 crossdev/wpa-build/wpa_supplicant-*/
 crossdev/wpa-build/compat/libc/*.o
+
+# --- packaging ---
+/build/
+/dist/
+*.egg-info/

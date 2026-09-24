@@ -472,7 +472,7 @@ def build_parser():
     sp.add_argument('--dry-run', action='store_true')
     sp.set_defaults(func=cmd_name, writes=True)
 
-    sp = wsub.add_parser('backup', help='save the live WiFi blob to backups/')
+    sp = wsub.add_parser('backup', help=f'save the live WiFi blob to {wifimod.BACKUP_DIR}')
     sp.add_argument('--note', default='manual', help='label used in the file name')
     sp.set_defaults(func=cmd_wifi_backup)
 

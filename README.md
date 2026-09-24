@@ -31,8 +31,9 @@ even when everything worked.
 
 ## If something goes wrong
 
-Every Wi-Fi write first saves the current config to `backups/`, so most mistakes are one command
-away from undone.
+Every Wi-Fi write first saves the current config to a backup file (`backups/` in a checkout; see
+[Install](#install--run) for the other locations), so most mistakes are one command away from
+undone.
 
 | What happened | Fix |
 |---|---|
@@ -129,13 +130,27 @@ the build and the kernel ABI table are in [crossdev/wpa-build/](crossdev/wpa-bui
 
 ## Install / run
 
-No dependencies beyond Python 3.
+Python 3.8 or newer, no other dependencies; Linux, macOS or Windows. Install the `airportctl`
+command with [pipx](https://pipx.pypa.io/):
+
+```sh
+pipx install git+https://github.com/TDSOJohn/airport-express-tools.git
+airportctl --help
+```
+
+Or run it from a checkout without installing anything, which is what you want for `docs/`,
+`tools/` and `crossdev/` anyway:
 
 ```sh
 git clone https://github.com/TDSOJohn/airport-express-tools.git && cd airport-express-tools
-python3 -m airportctl --help
-ln -sf "$PWD/airportctl-run" ~/.local/bin/airportctl    # optional, puts `airportctl` on PATH
+python3 -m airportctl --help     # the examples in this README use this form
+pipx install -e .                # optional: `airportctl` on PATH, running this checkout's code
 ```
+
+Wi-Fi backups go to `backups/` in a checkout (including `pipx install -e`), and to
+`~/.local/state/airportctl/backups` for an installed copy (`%LOCALAPPDATA%\airportctl\backups`
+on Windows, `~/Library/Application Support/airportctl/backups` on macOS).
+`airportctl wifi -h` prints the path, and `AIRPORTCTL_BACKUP_DIR` overrides it.
 
 Connect your machine to the Express's **LAN** port (`‹•••›`), not the WAN port, with a profile
 that never takes the default route — see [docs/extracting-acpd.md](docs/extracting-acpd.md) §1
@@ -144,7 +159,7 @@ for the `nmcli` recipe. Defaults are host `10.0.1.1`, admin password `public`.
 ## Safety
 
 * **Use this over a direct cable.** ACP only lightly obfuscates the admin password on the wire.
-* Every write backs the `WiFi` blob up to `backups/` first, refuses to proceed if the live blob
+* Every write backs the `WiFi` blob up first, refuses to proceed if the live blob
   does not re-encode byte-identically, and reads back to confirm. `wifi restore FILE` puts any
   backup back.
 * `wifi join` refuses to write while the gate is closed, because that is exactly the case that

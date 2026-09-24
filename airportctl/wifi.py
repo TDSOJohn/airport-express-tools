@@ -10,13 +10,28 @@ For WPA/WPA2, raWE is the 32-byte PMK the device copies verbatim into wpa_psk.
 import datetime
 import hashlib
 import os
+import sys
 
 from . import acp, cfl, props
 
-# Deterministic regardless of how the package was reached (a symlinked package directory would
-# otherwise give a different answer than the real one). Override with AIRPORTCTL_BACKUP_DIR.
-BACKUP_DIR = os.environ.get('AIRPORTCTL_BACKUP_DIR') or os.path.join(
-    os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'backups')
+def _default_backup_dir():
+    """backups/ next to the package in a source checkout (including an editable install);
+    otherwise a per-user state directory, so an installed copy doesn't write into site-packages.
+    realpath keeps the answer the same however the package was reached (e.g. via a symlink)."""
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if os.path.isfile(os.path.join(root, 'pyproject.toml')):
+        return os.path.join(root, 'backups')
+    if os.name == 'nt':
+        base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
+    elif sys.platform == 'darwin':
+        base = os.path.expanduser('~/Library/Application Support')
+    else:
+        base = os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state')
+    return os.path.join(base, 'airportctl', 'backups')
+
+
+# Override with AIRPORTCTL_BACKUP_DIR.
+BACKUP_DIR = os.environ.get('AIRPORTCTL_BACKUP_DIR') or _default_backup_dir()
 
 
 def load(host, password):
@@ -107,7 +122,7 @@ def join(radio, ssid, secret, mode='wpa2', psta=False):
 
 
 def backup(host, password, note='pre-write'):
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)   # the blob holds the WPA PMK
     raw = acp.get_raw(host, password, 'WiFi')
     ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
     path = os.path.join(BACKUP_DIR, f'WiFi-{note}-{ts}.cfb')

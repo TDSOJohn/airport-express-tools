@@ -8,13 +8,9 @@ ACP admin protocol (TCP 5009) — built on the reverse-engineering in [`../docs/
 
 ## Run
 ```sh
-airportctl [--host H] [-p ADMINPW|@FILE] <command>     # installed on PATH (see below)
-./airportctl-run <command>                             # launcher, from any dir
-python3 -m airportctl <command>                        # only from inside this folder
-```
-`airportctl` is a symlink on PATH -> `airportctl-run`. To (re)create it:
-```sh
-ln -sf "$PWD/airportctl-run" ~/.local/bin/airportctl
+airportctl [--host H] [-p ADMINPW|@FILE] <command>     # installed with pipx (see ../README.md)
+python3 -m airportctl <command>                        # from the repo root, nothing installed
+../airportctl-run <command>                            # launcher for a checkout, from any dir
 ```
 
 ## Commands
@@ -29,7 +25,7 @@ wifi secure wpa  PW|@FILE       [flags]    WPA/TKIP (legacy)          raWM=3
 wifi secure mixed PW|@FILE      [flags]    WPA+WPA2 mixed             raWM=7
 wifi secure wep  HEXKEY         [flags]    WEP (insecure)  10/26 hex  raWM=1
 wifi hidden on|off              [flags]    hide/show SSID (raCl)
-wifi backup [--note LABEL]                 save the live WiFi blob to ../backups/
+wifi backup [--note LABEL]                 save the live WiFi blob (path: `wifi -h`)
 wifi restore FILE [--reboot]               write a saved blob back (recovery path)
 wifi join SSID --wifi-password PW|@FILE    become a client of an existing network (raSt=1)
             [--band 2.4|5] [--security wpa2|mixed|wpa|open] [--psta]
@@ -125,12 +121,14 @@ Wi-Fi changes only take effect after a **reboot** (the device regenerates
 
 ## Safety
 Every write: parses the live blob and refuses if it doesn't re-encode byte-identically,
-auto-backs-up to `../backups/WiFi-pre-write-<ts>.cfb`, writes, then reads back and confirms.
+auto-backs-up to `WiFi-pre-write-<ts>.cfb` in the backup directory, writes, then reads back and
+confirms. That directory is `../backups/` in a checkout (and an editable install), otherwise a
+per-user state directory such as `~/.local/state/airportctl/backups`; `wifi -h` prints it.
 
-`backups/` holds **your base station's real configuration**, including the 32-byte WPA PMK
-derived from your Wi-Fi passphrase. It is in `.gitignore`, but it is still inside the working
-tree — so don't copy or archive the tree wholesale, or set `AIRPORTCTL_BACKUP_DIR` to somewhere
-outside it, e.g. `export AIRPORTCTL_BACKUP_DIR=~/.local/state/airportctl`.
+The backups hold **your base station's real configuration**, including the 32-byte WPA PMK
+derived from your Wi-Fi passphrase. In a checkout, `backups/` is in `.gitignore` but still inside
+the working tree, so don't copy or archive the tree wholesale, or set `AIRPORTCTL_BACKUP_DIR` to
+somewhere outside it, e.g. `export AIRPORTCTL_BACKUP_DIR=~/.local/state/airportctl/backups`.
 Recover from any of those backups:
 ```sh
 python3 -m airportctl wifi restore ../backups/WiFi-pre-write-<ts>.cfb --reboot

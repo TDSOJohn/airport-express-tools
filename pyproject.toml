@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airportctl"
+dynamic = ["version"]
+description = "Configure a 2nd-gen AirPort Express (A1392) over Apple's ACP admin protocol, without AirPort Utility"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Giovanni Basso" }]
+requires-python = ">=3.8"
+dependencies = []
+keywords = ["airport", "airport-express", "apple", "acp", "wifi", "router"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking",
+]
+
+[project.urls]
+Homepage = "https://github.com/TDSOJohn/airport-express-tools"
+Issues = "https://github.com/TDSOJohn/airport-express-tools/issues"
+
+[project.scripts]
+airportctl = "airportctl.cli:main"
+
+[tool.setuptools]
+# Only the package: tools/, docs/, crossdev/ and ghidra_scripts/ stay in the repo.
+packages = ["airportctl"]
+
+[tool.setuptools.dynamic]
+version = { attr = "airportctl.__version__" }
