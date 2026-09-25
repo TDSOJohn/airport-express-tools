@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>airportctl</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  --bg: #f5f5f4; --card: #ffffff; --fg: #1c1917; --muted: #6b6560; --line: #e2dfdc;
+  --accent: #2563eb; --accent-fg: #ffffff; --ok: #15803d; --warn: #b45309; --bad: #b91c1c;
+  --warn-bg: #fef3c7; --bad-bg: #fee2e2; --ok-bg: #dcfce7; --code: #f0efed;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161514; --card: #201f1d; --fg: #eeedeb; --muted: #a09a94; --line: #34322f;
+    --accent: #60a5fa; --accent-fg: #0b1220; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --warn-bg: #3a2c0c; --bad-bg: #3b1616; --ok-bg: #11301c; --code: #171615;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 920px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between; margin-bottom: 16px; }
+h1 { font-size: 22px; margin: 0; font-weight: 650; }
+h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
+.sub { color: var(--muted); font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-width: 0; }
+.card.wide { grid-column: 1 / -1; }
+.badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; font-weight: 600; }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+.banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.banner.warn { background: var(--warn-bg); color: var(--warn); }
+.banner.bad { background: var(--bad-bg); color: var(--bad); }
+button, input, select { font: inherit; color: inherit; }
+button {
+  border: 1px solid var(--line); background: var(--card); border-radius: 7px; padding: 6px 12px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+input[type=text], input[type=password], select {
+  border: 1px solid var(--line); background: var(--bg); border-radius: 7px; padding: 6px 9px; min-width: 0;
+}
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+label.f { display: grid; gap: 3px; font-size: 13px; color: var(--muted); flex: 1 1 150px; min-width: 0; }
+label.f > input, label.f > select { color: var(--fg); width: 100%; }
+label.check { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; }
+.action { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.action .row, .card > .row { align-items: flex-end; }
+.action h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+.hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.scroll { overflow-x: auto; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+code, pre { font: 12.5px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+pre { background: var(--code); border: 1px solid var(--line); border-radius: 7px; padding: 10px; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
+pre .w { color: var(--warn); font-weight: 600; }
+.log-entry { border-top: 1px solid var(--line); padding: 10px 0; }
+.log-entry:first-child { border-top: 0; }
+.log-entry .cmd { font-weight: 600; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.ok-t { color: var(--ok); } .bad-t { color: var(--bad); } .warn-t { color: var(--warn); }
+dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--fg); padding: 18px; width: min(640px, calc(100vw - 32px)); }
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+dialog h2 { margin-bottom: 6px; }
+.dlg-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1 id="title">AirPort Express</h1>
+      <div class="sub" id="subtitle">connecting…</div>
+    </div>
+    <div class="row">
+      <button id="refresh">Refresh</button>
+      <button id="reboot" class="danger">Reboot…</button>
+    </div>
+  </header>
+
+  <div id="reboot-banner" class="banner warn" hidden>
+    <span><b>Changes stored.</b> Wi-Fi and mode changes take effect after a reboot.</span>
+    <button id="reboot2">Reboot now</button>
+  </div>
+  <div id="error-banner" class="banner bad" hidden></div>
+  <div id="untested-banner" class="banner warn" hidden></div>
+
+  <div class="grid">
+    <section class="card wide" id="wifi-card">
+      <h2>Wi-Fi network</h2>
+      <div id="radios-error" class="bad-t" hidden></div>
+      <div class="scroll"><table id="radios"><thead><tr>
+        <th>Radio</th><th>Network name</th><th>Security</th><th>Channel</th><th>Hidden</th><th>Role</th>
+      </tr></thead><tbody></tbody></table></div>
+
+      <div class="action">
+        <h3>Rename</h3>
+        <div class="row">
+          <label class="f">Network name<input type="text" id="ssid-name" maxlength="32" autocomplete="off"></label>
+          <label class="f" id="ssid-pw-wrap">Wi-Fi password (re-derives the WPA key)<input type="password" id="ssid-pw" autocomplete="new-password"></label>
+          <label class="f" style="flex:0 1 150px">Radios<select class="radio-scope" id="ssid-radio"></select></label>
+          <button class="primary" id="ssid-go">Review…</button>
+        </div>
+        <p class="hint warn-t" id="ssid-hint" hidden>Enter the Wi-Fi password too: the WPA key is derived from the network name, so it has to be recomputed for the new one.</p>
+      </div>
+
+      <div class="action">
+        <h3>Security</h3>
+        <div class="row">
+          <label class="f" style="flex:0 1 190px">Mode<select id="sec-mode">
+            <option value="wpa2">WPA2 Personal</option>
+            <option value="mixed">WPA/WPA2 Personal</option>
+            <option value="wpa">WPA Personal (legacy)</option>
+            <option value="wep">WEP (insecure)</option>
+            <option value="open">None (open)</option>
+          </select></label>
+          <label class="f" id="sec-secret-wrap"><span id="sec-secret-label">Wi-Fi password (8–63 characters)</span><input type="password" id="sec-secret" autocomplete="new-password"></label>
+          <label class="f" style="flex:0 1 150px">Radios<select class="radio-scope" id="sec-radio"></select></label>
+          <button class="primary" id="sec-go">Review…</button>
+        </div>
+      </div>
+
+      <div class="action">
+        <h3>Visibility</h3>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="hidden-on"> Hide the network name</label>
+          <label class="f" style="flex:0 1 150px">Radios<select class="radio-scope" id="hidden-radio"></select></label>
+          <button class="primary" id="hidden-go">Review…</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Base station</h2>
+      <div class="row">
+        <label class="f">Name<input type="text" id="bs-name" autocomplete="off"></label>
+        <button class="primary" id="bs-name-go">Review…</button>
+      </div>
+      <div class="action">
+        <h3>Status light</h3>
+        <div class="seg" id="led" role="group" aria-label="Status light">
+          <button data-led="auto">Auto</button><button data-led="amber">Amber</button><button data-led="green">Green</button>
+        </div>
+        <p class="hint" id="led-hint">Changes immediately, no reboot.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Connection</h2>
+      <div class="row">
+        <label class="f">Base station address<input type="text" id="conn-host" autocomplete="off"></label>
+        <label class="f">Admin password<input type="password" id="conn-pw" placeholder="unchanged" autocomplete="off"></label>
+        <button id="conn-go">Connect</button>
+      </div>
+      <p class="hint">Use a direct cable: ACP only lightly obfuscates the admin password.</p>
+    </section>
+
+    <section class="card wide">
+      <h2>Join an existing network</h2>
+      <p class="hint" style="margin:0 0 10px">Makes the Express a wireless client of your router (for AirPlay over Wi-Fi). If the join works it leaves 10.0.1.1 and takes an address on that network; if it fails it keeps its wired role.</p>
+      <div id="gate"></div>
+      <div class="row" style="margin-top:10px; align-items:flex-end">
+        <label class="f">Network to join<input type="text" id="join-ssid" maxlength="32" autocomplete="off"></label>
+        <label class="f">Its password<input type="password" id="join-pw" autocomplete="new-password"></label>
+        <label class="f" style="flex:0 1 110px">Band<select id="join-band"><option value="2.4">2.4 GHz</option><option value="5">5 GHz</option></select></label>
+        <label class="f" style="flex:0 1 140px">Security<select id="join-sec"><option value="wpa2">WPA2</option><option value="mixed">WPA/WPA2</option><option value="wpa">WPA</option><option value="open">Open</option></select></label>
+      </div>
+      <div class="row" style="margin-top:10px; justify-content:space-between; align-items:center">
+        <label class="check"><input type="checkbox" id="join-psta"> Bridge wired clients onto it (proxy-STA)</label>
+        <button class="primary" id="join-go">Review…</button>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px">
+        <h2 style="margin:0">Wi-Fi backups</h2>
+        <button id="backup-go">Back up now</button>
+      </div>
+      <p class="hint" style="margin:0 0 8px">Every Wi-Fi write saves one first. They hold the WPA key: keep them private. <span id="backup-dir"></span></p>
+      <div class="scroll"><table id="backups"><thead><tr><th>Saved</th><th>File</th><th></th></tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <section class="card wide">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <h2 style="margin:0">Log</h2>
+        <button id="log-clear">Clear</button>
+      </div>
+      <div id="log"><p class="muted" style="margin:8px 0 0">Every change runs the matching airportctl command; its output shows up here.</p></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="dlg">
+  <h2 id="dlg-title"></h2>
+  <div class="sub" id="dlg-sub"></div>
+  <pre id="dlg-cmd"></pre>
+  <pre id="dlg-out"></pre>
+  <div id="dlg-err" class="bad-t" style="margin-top:8px"></div>
+  <div class="dlg-buttons">
+    <button id="dlg-cancel">Cancel</button>
+    <button id="dlg-ok" class="primary">Write changes</button>
+  </div>
+</dialog>
+
+<script>
+'use strict';
+const TOKEN = location.hash.slice(1);
+const $ = (id) => document.getElementById(id);
+let S = null;            // last /api/status
+let busy = false;
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null) el.append(c);
+  return el;
+}
+
+async function api(path, body) {
+  const opt = { method: body === undefined ? 'GET' : 'POST', headers: { 'X-Airportctl-Token': TOKEN } };
+  if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  try {
+    const r = await fetch('/api/' + path, opt);
+    return await r.json();
+  } catch (e) {
+    return { ok: false, error: 'the airportctl ui server is not answering (was it stopped?)' };
+  }
+}
+
+function setBusy(on) {
+  busy = on;
+  document.querySelectorAll('button').forEach(b => { if (!b.closest('dialog')) b.disabled = on; });
+  if (!on) updateForms();
+}
+
+// --- rendering -------------------------------------------------------------
+
+function render() {
+  const s = S || {};
+  const d = s.device;
+  $('title').textContent = d ? (d.name || 'AirPort Express') : 'AirPort Express';
+  $('subtitle').textContent = d
+    ? [s.host, d.model, 'firmware ' + d.firmware, d.uptime && ('up ' + d.uptime)].filter(Boolean).join(' · ')
+    : (s.host ? s.host + ' · not connected' : 'connecting…');
+  $('error-banner').hidden = !s.error;
+  $('error-banner').textContent = s.error ? 'Cannot read the base station at ' + s.host + ': ' + s.error : '';
+  $('reboot-banner').hidden = !s.pending_reboot;
+
+  const ub = $('untested-banner');
+  ub.hidden = !(d && !d.tested);
+  ub.replaceChildren();
+  if (d && !d.tested) ub.append(h('span', {}, 'This model/firmware (', d.product + ' / ' + d.firmware,
+    ') has not been tested. Reads are safe; writes are backed up first. ',
+    h('a', { href: d.report_url, target: '_blank', rel: 'noopener' }, 'Report what works')));
+
+  if (document.activeElement !== $('conn-host')) $('conn-host').value = s.host || '';
+  if (d && document.activeElement !== $('bs-name') && !$('bs-name').dataset.edited) $('bs-name').value = d.name || '';
+
+  // LED
+  const led = s.led || {};
+  document.querySelectorAll('#led button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.led === led.state)));
+  $('led-hint').textContent = led.error ? led.error
+    : (led.value != null && !led.state ? 'Current value ' + led.value + ' (' + led.label + '). ' : '') + 'Changes immediately, no reboot.';
+
+  // radios
+  const tb = $('radios').tBodies[0];
+  tb.replaceChildren();
+  $('radios-error').hidden = !s.radios_error;
+  $('radios-error').textContent = s.radios_error || '';
+  for (const r of s.radios || []) {
+    tb.append(h('tr', {},
+      h('td', {}, r.band, h('span', { class: 'muted' }, ' · ' + r.index)),
+      h('td', {}, h('b', {}, r.ssid ?? '')),
+      h('td', {}, r.security === 'open' ? h('span', { class: 'warn-t' }, 'open') : r.security_label),
+      h('td', {}, String(r.channel ?? '')),
+      h('td', {}, r.hidden ? 'yes' : 'no'),
+      h('td', {}, r.station_label)));
+  }
+  for (const sel of document.querySelectorAll('.radio-scope')) {
+    const cur = sel.value;
+    sel.replaceChildren(h('option', { value: 'all' }, 'Both'),
+      ...(s.radios || []).map(r => h('option', { value: String(r.index) }, r.band)));
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+  if (s.radios && s.radios.length && !$('ssid-name').dataset.edited) $('ssid-name').value = s.radios[0].ssid || '';
+  if (s.radios && s.radios.length) $('hidden-on').checked = s.radios.every(r => r.hidden);
+
+  renderGate(s.gate);
+  updateForms();
+}
+
+function renderGate(g) {
+  const box = $('gate');
+  box.replaceChildren();
+  if (!g) return;
+  if (g.error) { box.append(h('div', { class: 'bad-t' }, 'Could not read the join gate: ' + g.error)); return; }
+  if (!g.reasons.length) {
+    box.append(h('div', {}, h('span', { class: 'badge ok' }, 'Ready'),
+      ' The firmware will honour a join. Sharing: ' + g.sharing + ', role ' + g.role + ' (' + g.role_label + ').'));
+    return;
+  }
+  box.append(h('div', {}, h('span', { class: 'badge bad' }, 'Blocked'),
+    ' The firmware would ignore a join and broadcast your network\'s name as its own access point, so writes are refused until this is fixed:'));
+  const fixes = { 'mode.ctim': 'Set the configuration timestamp', 'mode.wan': 'Set the WAN uplink to wired' };
+  box.append(h('ul', { style: 'margin:8px 0 0; padding-left:20px' }, g.reasons.map(r => h('li', { class: 'sub' }, r))));
+  box.append(h('div', { class: 'row', style: 'margin-top:8px' }, g.fixes.map(a =>
+    h('button', { onclick: () => review(a, {}, fixes[a], 'Stored now; the join gate reads it at the next reboot.') }, fixes[a] + '…'))));
+}
+
+function currentSecurity() {
+  const rs = (S && S.radios) || [];
+  const scope = $('ssid-radio').value;
+  const sel = scope === 'all' ? rs : rs.filter(r => String(r.index) === scope);
+  return sel.some(r => ['wpa', 'wpa2', 'mixed'].includes(r.security));
+}
+
+function updateForms() {
+  $('ssid-pw-wrap').hidden = !currentSecurity();
+  const m = $('sec-mode').value;
+  $('sec-secret-wrap').hidden = m === 'open';
+  $('sec-secret-label').textContent = m === 'wep' ? 'WEP key (10 or 26 hex digits)' : 'Wi-Fi password (8–63 characters)';
+  const blocked = !!(S && S.gate && S.gate.reasons && S.gate.reasons.length);
+  $('join-go').disabled = busy || blocked;
+  $('join-go').title = blocked ? 'Fix the join gate first' : '';
+}
+
+async function renderBackups() {
+  const res = await api('backups');
+  $('backup-dir').textContent = res.dir ? 'Folder: ' + res.dir : '';
+  const tb = $('backups').tBodies[0];
+  tb.replaceChildren();
+  if (!res.backups || !res.backups.length) { tb.append(h('tr', {}, h('td', { colspan: 3, class: 'muted' }, 'No backups yet.'))); return; }
+  for (const b of res.backups) {
+    tb.append(h('tr', {},
+      h('td', { style: 'white-space:nowrap' }, b.when),
+      h('td', {}, h('code', {}, b.file)),
+      h('td', { style: 'text-align:right' }, h('button', {
+        onclick: () => review('wifi.restore', { file: b.file }, 'Restore ' + b.file,
+          'Writes this saved Wi-Fi configuration back (the current one is backed up first).')
+      }, 'Restore…'))));
+  }
+}
+
+// --- log -------------------------------------------------------------------
+
+function highlight(text) {
+  const pre = h('pre', {});
+  for (const line of (text || '').split('\n')) {
+    const i = line.indexOf('!!');          // warnings run from !! to the end of the line
+    pre.append(i < 0 ? line : line.slice(0, i), i < 0 ? '' : h('span', { class: 'w' }, line.slice(i)), '\n');
+  }
+  return pre;
+}
+
+function log(res) {
+  const logEl = $('log');
+  if (logEl.firstElementChild && logEl.firstElementChild.tagName === 'P') logEl.replaceChildren();
+  const status = res.ok ? h('span', { class: res.dry_run ? 'muted' : 'ok-t' }, res.dry_run ? 'preview' : 'done')
+    : h('span', { class: 'bad-t' }, 'failed');
+  logEl.prepend(h('div', { class: 'log-entry' },
+    h('div', { class: 'row', style: 'justify-content:space-between' },
+      h('span', { class: 'cmd' }, h('code', {}, res.command || '')), status),
+    res.output ? highlight(res.output.trimEnd()) : null,
+    res.error ? h('div', { class: 'bad-t', style: 'margin-top:6px' }, res.error) : null));
+}
+
+// --- actions ---------------------------------------------------------------
+
+function dialog(title, sub, res, okLabel) {
+  $('dlg-title').textContent = title;
+  $('dlg-sub').textContent = sub || '';
+  $('dlg-cmd').textContent = res.command || '';
+  $('dlg-cmd').hidden = !res.command;
+  const out = highlight((res.output || '').trimEnd());
+  $('dlg-out').replaceChildren(...out.childNodes);
+  $('dlg-out').hidden = !res.output;
+  $('dlg-err').textContent = res.error || '';
+  $('dlg-ok').hidden = !okLabel;
+  $('dlg-ok').textContent = okLabel || '';
+  $('dlg-cancel').textContent = okLabel ? 'Cancel' : 'Close';
+  const d = $('dlg');
+  d.showModal();
+  return new Promise(resolve => {
+    const done = (v) => { d.close(); $('dlg-ok').onclick = $('dlg-cancel').onclick = d.oncancel = null; resolve(v); };
+    $('dlg-ok').onclick = () => done(true);
+    $('dlg-cancel').onclick = () => done(false);
+    d.oncancel = () => done(false);
+  });
+}
+
+// Dry run first, show exactly what the CLI would do, write only on confirmation.
+async function review(action, params, title, sub) {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const pre = await api('run', { action, params, dry_run: true });
+    if (!pre.ok) { log(pre); await dialog(title, sub, pre, null); return; }
+    const go = await dialog(title, sub, pre, pre.dry_run ? 'Write changes' : 'Run');
+    if (!go) return;
+    const res = await api('run', { action, params, dry_run: false });
+    log(res);
+    if (!res.ok) await dialog(title + ': failed', '', res, null);
+    for (const id of ['ssid-name', 'bs-name']) delete $(id).dataset.edited;
+    for (const id of ['ssid-pw', 'sec-secret', 'join-pw']) $(id).value = '';
+  } finally {
+    setBusy(false);
+  }
+  await refresh();
+  if (action.startsWith('wifi.')) renderBackups();
+}
+
+async function direct(action, params) {
+  if (busy) return;
+  setBusy(true);
+  const res = await api('run', { action, params, dry_run: false });
+  log(res);
+  setBusy(false);
+  if (!res.ok) await dialog(action + ': failed', '', res, null);
+  await refresh();
+  if (action === 'wifi.backup') renderBackups();
+}
+
+function radioParam(id) { const v = $(id).value; return v === 'all' ? null : Number(v); }
+
+$('ssid-go').onclick = () => {
+  // The WPA key is derived from the name: renaming without the password would lock clients out.
+  if (currentSecurity() && !$('ssid-pw').value) {
+    $('ssid-hint').hidden = false;
+    $('ssid-pw').focus();
+    return;
+  }
+  $('ssid-hint').hidden = true;
+  review('wifi.ssid',
+  { name: $('ssid-name').value, radio: radioParam('ssid-radio'), wifi_password: $('ssid-pw').value || null },
+  'Rename the Wi-Fi network', 'Nothing has been written yet. Review the change:');
+};
+$('sec-go').onclick = () => review('wifi.secure',
+  { mode: $('sec-mode').value, secret: $('sec-mode').value === 'open' ? null : $('sec-secret').value, radio: radioParam('sec-radio') },
+  'Change Wi-Fi security', 'Nothing has been written yet. Review the change:');
+$('hidden-go').onclick = () => review('wifi.hidden',
+  { on: $('hidden-on').checked, radio: radioParam('hidden-radio') },
+  'Change network visibility', 'Nothing has been written yet. Review the change:');
+$('bs-name-go').onclick = () => review('name', { name: $('bs-name').value },
+  'Rename the base station', 'Nothing has been written yet. Review the change:');
+$('join-go').onclick = () => review('wifi.join',
+  { ssid: $('join-ssid').value, wifi_password: $('join-pw').value, band: $('join-band').value,
+    security: $('join-sec').value, psta: $('join-psta').checked },
+  'Join ' + ($('join-ssid').value || 'a network'),
+  'Nothing has been written yet. After writing, reboot to make the Express try the join.');
+$('backup-go').onclick = () => direct('wifi.backup', { note: 'manual' });
+document.querySelectorAll('#led button').forEach(b => b.onclick = () => direct('led', { state: b.dataset.led }));
+$('log-clear').onclick = () => $('log').replaceChildren();
+$('refresh').onclick = () => { refresh(); renderBackups(); };
+for (const id of ['ssid-name', 'bs-name']) $(id).addEventListener('input', () => { $(id).dataset.edited = '1'; });
+$('ssid-radio').onchange = updateForms;
+$('sec-mode').onchange = updateForms;
+
+$('conn-go').onclick = async () => {
+  const res = await api('connect', { host: $('conn-host').value, password: $('conn-pw').value });
+  $('conn-pw').value = '';
+  if (!res.ok) { await dialog('Connect', '', res, null); return; }
+  await refresh();
+};
+
+async function doReboot() {
+  const go = await dialog('Reboot the base station?', 'Wi-Fi drops for about a minute. Stored changes take effect when it comes back.',
+    { command: 'airportctl reboot' }, 'Reboot');
+  if (!go) return;
+  setBusy(true);
+  const res = await api('run', { action: 'reboot', params: {}, dry_run: false });
+  log(res);
+  if (!res.ok) { setBusy(false); return; }
+  $('subtitle').textContent = 'rebooting… waiting for the base station to come back';
+  const start = Date.now();
+  await new Promise(r => setTimeout(r, 15000));
+  while (Date.now() - start < 240000) {
+    const s = await api('status');
+    if (s.device) { S = s; break; }
+    $('subtitle').textContent = 'rebooting… ' + Math.round((Date.now() - start) / 1000) + ' s';
+    await new Promise(r => setTimeout(r, 4000));
+  }
+  setBusy(false);
+  await refresh();
+}
+$('reboot').onclick = doReboot;
+$('reboot2').onclick = doReboot;
+
+async function refresh() {
+  if (!TOKEN) { S = { error: 'no access token in the URL: open the link `airportctl ui` printed' }; render(); return; }
+  S = await api('status');
+  render();
+}
+
+refresh();
+renderBackups();
+</script>
+</body>
+</html>

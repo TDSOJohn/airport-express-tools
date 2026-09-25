@@ -38,6 +38,7 @@ rpc NAME [--json '{..}'] [--force]         call one; read-only ones need no inpu
 led  [show|auto|amber|green|N]             front status LED (LEDc): live, no reboot
 name  BASE-STATION-NAME                    set base station name (syNm)
 admin-password [PW|@FILE]                  change the admin password (syPW); prompts if omitted.
+ui [--port N] [--no-browser]               local web page for the everyday commands; writes are previewed first
                                            ACP switches at once, the debug SSH login at next reboot
 info                                       model (syAP), firmware (syVs), uptime; tested or not
 reboot                                     reboot (needed to apply Wi-Fi changes)

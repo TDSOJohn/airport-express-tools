@@ -39,7 +39,7 @@ def cmd_wifi_show(args):
 
 
 def cmd_wifi_ssid(args):
-    secret = acp.read_password(args.wifi_password) if args.wifi_password else None
+    secret = args.wifi_password
     wifi, _ = wifimod.load(args.host, args.password)
     lines = []
     for i in _select(wifi, args.radio):
@@ -60,7 +60,7 @@ def cmd_wifi_ssid(args):
 
 
 def cmd_wifi_secure(args):
-    secret = acp.read_password(args.secret) if args.secret else None
+    secret = args.secret
     wifi, _ = wifimod.load(args.host, args.password)
     lines = []
     for i in _select(wifi, args.radio):
@@ -73,7 +73,7 @@ def cmd_wifi_secure(args):
 
 
 def cmd_wifi_join(args):
-    secret = acp.read_password(args.wifi_password)
+    secret = args.wifi_password
     wifi, _ = wifimod.load(args.host, args.password)
     rs = wifimod.radios(wifi)
     join_idx = {'2.4': 0, '5': 1}[args.band]
@@ -155,7 +155,7 @@ def cmd_name(args):
 def cmd_admin_password(args):
     """Change the admin password (syPW): ACP auth and, with dbug on, the SSH root login."""
     if args.new:
-        new = acp.read_password(args.new)
+        new = args.new
     else:
         import getpass
         new = getpass.getpass('new admin password: ')
@@ -403,6 +403,11 @@ def cmd_mode_wan(args):
     print('a reboot is required to apply')
 
 
+def cmd_ui(args):
+    from . import ui
+    ui.serve(args.host, args.password, port=args.port, open_browser=not args.no_browser)
+
+
 def _add_write_flags(sp):
     sp.add_argument('--radio', type=int, metavar='N', help='only this radio index (default: all)')
     sp.add_argument('--dry-run', action='store_true', help='show the change without writing')
@@ -529,18 +534,34 @@ def build_parser():
 
     sp = sub.add_parser('reboot', help='reboot the base station')
     sp.set_defaults(func=cmd_reboot)
+
+    sp = sub.add_parser('ui', help='open a local web page for the everyday commands')
+    sp.add_argument('--port', type=int, default=0, help='local port (default: a free one)')
+    sp.add_argument('--no-browser', action='store_true', help='print the URL, do not open it')
+    sp.set_defaults(func=cmd_ui)
     return p
+
+
+def run(args):
+    """Run a parsed command, warning first if it is a real write to an untested device.
+    Secrets must already be resolved (see main); `airportctl ui` calls this directly."""
+    # `led` and `mode wan` also have read-only forms
+    reading = getattr(args, 'state', 'x') in (None, 'show') or getattr(args, 'kind', None) == 'show'
+    if getattr(args, 'writes', False) and not getattr(args, 'dry_run', False) and not reading:
+        warn_if_untested(args)
+    args.func(args)
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    args.password = acp.read_password(args.password)
     try:
-        # `led` and `mode wan` also have read-only forms
-        reading = getattr(args, 'state', 'x') in (None, 'show') or getattr(args, 'kind', None) == 'show'
-        if getattr(args, 'writes', False) and not getattr(args, 'dry_run', False) and not reading:
-            warn_if_untested(args)
-        args.func(args)
+        # @FILE is a command-line convenience, so it is resolved here and not in the commands:
+        # the UI passes typed values straight through, where a leading @ is just a character.
+        args.password = acp.read_password(args.password)
+        for name in ('wifi_password', 'secret', 'new'):
+            if getattr(args, name, None):
+                setattr(args, name, acp.read_password(getattr(args, name)))
+        run(args)
     except (RuntimeError, ValueError, OSError) as e:
         raise SystemExit(f'error: {e}')
 

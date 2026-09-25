@@ -31,5 +31,8 @@ airportctl = "airportctl.cli:main"
 # Only the package: tools/, docs/, crossdev/ and ghidra_scripts/ stay in the repo.
 packages = ["airportctl"]
 
+[tool.setuptools.package-data]
+airportctl = ["ui.html"]
+
 [tool.setuptools.dynamic]
 version = { attr = "airportctl.__version__" }
