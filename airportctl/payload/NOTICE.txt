@@ -1,0 +1,49 @@
+Files in this directory are copied to the AirPort Express by `airportctl join`.
+
+wpa_supplicant
+    wpa_supplicant 0.7.3, cross-compiled for the A1392 (NetBSD 4.0, mipseb, static) by
+    crossdev/wpa-build/build-wpa.sh in https://github.com/TDSOJohn/airport-express-tools,
+    with the shims in crossdev/wpa-build/compat/ (including our l2_packet_bpf.c).
+    SHA-256 0a8ee35fd670c310047746fa77377325d6d48e69754c1d6c1401b036b5febf33, 295,236 bytes.
+    Source: https://w1.fi/releases/wpa_supplicant-0.7.3.tar.gz
+
+    wpa_supplicant is dual-licensed under the GPL version 2 and the BSD license; it is
+    redistributed here under the BSD license:
+
+    Copyright (c) 2003-2010, Jouni Malinen <j@w1.fi> and contributors
+    All Rights Reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+    3. Neither the name(s) of the above-listed copyright holder(s) nor the
+       names of its contributors may be used to endorse or promote products
+       derived from this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+    The binary is statically linked against the NetBSD 4.0 C library, which is under
+    BSD-style licenses. This product includes software developed by the University of
+    California, Berkeley and its contributors, and by the NetBSD Foundation, Inc. and
+    its contributors.
+
+autorun.sh
+    Part of airport-express-tools, MIT License (see LICENSE at the repository root).

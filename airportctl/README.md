@@ -27,8 +27,15 @@ wifi secure wep  HEXKEY         [flags]    WEP (insecure)  10/26 hex  raWM=1
 wifi hidden on|off              [flags]    hide/show SSID (raCl)
 wifi backup [--note LABEL]                 save the live WiFi blob (path: `wifi -h`)
 wifi restore FILE [--reboot]               write a saved blob back (recovery path)
-wifi join SSID --wifi-password PW|@FILE    become a client of an existing network (raSt=1)
+wifi join SSID --wifi-password PW|@FILE    become a client of an existing network (raSt=1).
+                                           NOTE: the firmware's own supplicant crashes on 7.8.1,
+                                           so this doesn't connect (../docs/join-mode.md)
             [--band 2.4|5] [--security wpa2|mixed|wpa|open] [--psta]
+join install SSID --wifi-password PW|@FILE --ip IP --gateway GW
+                                           join a WPA2 network with our own supplicant over the
+                                           debug SSH login (2.4 GHz; 5 GHz stays up); no reboot
+join start | status | remove               rejoin (after each reboot on stock firmware) / show
+                                           the last run / delete it from /mnt/Flash
 mode show                                  the join gate: ctim, waCV, sharing props, role
 mode ctim [now|N]                          store the configuration timestamp (opens the gate)
 mode sharing nat|dhcp|bridge               connection sharing (raNA/raDS/raWB)
@@ -38,8 +45,9 @@ rpc NAME [--json '{..}'] [--force]         call one; read-only ones need no inpu
 led  [show|auto|amber|green|N]             front status LED (LEDc): live, no reboot
 name  BASE-STATION-NAME                    set base station name (syNm)
 admin-password [PW|@FILE]                  change the admin password (syPW); prompts if omitted.
-ui [--port N] [--no-browser]               local web page for the everyday commands; writes are previewed first
                                            ACP switches at once, the debug SSH login at next reboot
+ui [--port N] [--no-browser]               local web page for the everyday commands; writes are
+                                           previewed first (see "Web UI" in ../README.md)
 info                                       model (syAP), firmware (syVs), uptime; tested or not
 reboot                                     reboot (needed to apply Wi-Fi changes)
 

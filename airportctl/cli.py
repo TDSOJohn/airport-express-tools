@@ -92,6 +92,10 @@ def cmd_wifi_join(args):
                              '(`mode ctim now`), or pass --force / --dry-run.')
     except (RuntimeError, ValueError, OSError) as e:
         lines.append(f'!! could not check the join gate ({e}) - run `mode show` first')
+    lines.append('!! EXPERIMENTAL: this is the firmware\'s own client mode. On 7.8.1 its '
+                 'wpa_supplicant crashes at startup, so after the reboot the radio does not '
+                 'connect, and the other radio is switched off. `airportctl join` works instead '
+                 '(our own supplicant, over SSH). To undo this, restore the backup printed below.')
     lines.append(f'!! switching to WIRELESS-CLIENT mode: if the join succeeds the Express leaves '
                  f'10.0.1.1 and takes a DHCP address on {args.ssid!r}; if it fails it keeps its '
                  f'current wired role, so recovery over the cable stays possible either way.')
@@ -403,6 +407,27 @@ def cmd_mode_wan(args):
     print('a reboot is required to apply')
 
 
+def cmd_join_install(args):
+    from . import join
+    join.install(args.host, args.password, args.ssid, args.wifi_password, args.ip, args.gateway,
+                 netmask=args.netmask, start_now=not args.no_start, dry_run=args.dry_run)
+
+
+def cmd_join_start(args):
+    from . import join
+    join.start(args.host, args.password)
+
+
+def cmd_join_status(args):
+    from . import join
+    print(join.describe(join.status(args.host, args.password)))
+
+
+def cmd_join_remove(args):
+    from . import join
+    join.remove(args.host, args.password)
+
+
 def cmd_ui(args):
     from . import ui
     ui.serve(args.host, args.password, port=args.port, open_browser=not args.no_browser)
@@ -447,7 +472,8 @@ def build_parser():
     _add_write_flags(sp)
     sp.set_defaults(func=cmd_wifi_secure, writes=True)
 
-    sp = wsub.add_parser('join', help='become a wireless client of an existing network (raSt=1)')
+    sp = wsub.add_parser('join', help="EXPERIMENTAL: the firmware's own client mode (raSt=1); "
+                                      "doesn't connect on 7.8.1, use `airportctl join`")
     sp.add_argument('ssid', help='the network to join')
     sp.add_argument('--wifi-password', required=True, metavar='PW|@FILE',
                     help='the target network password (@FILE keeps it out of shell history)')
@@ -468,6 +494,28 @@ def build_parser():
     sp.add_argument('state', choices=['on', 'off'])
     _add_write_flags(sp)
     sp.set_defaults(func=cmd_wifi_hidden, writes=True)
+
+    join_p = sub.add_parser('join', help='join a Wi-Fi network with our own wpa_supplicant (needs '
+                                         'the debug SSH login; see docs/autorun.md)')
+    jsub = join_p.add_subparsers(dest='jcmd', required=True)
+    sp = jsub.add_parser('install', help='put the supplicant and the network on /mnt/Flash, '
+                                         'then join (2.4 GHz; 5 GHz stays up)')
+    sp.add_argument('ssid', help='the WPA2 network to join')
+    sp.add_argument('--wifi-password', required=True, metavar='PW|@FILE',
+                    help='its password; only the derived PMK is sent to the Express')
+    sp.add_argument('--ip', required=True, help="the Express's fixed address on that network "
+                                                "(pick one outside the router's DHCP pool)")
+    sp.add_argument('--gateway', required=True, help="the router's address")
+    sp.add_argument('--netmask', default='255.255.255.0')
+    sp.add_argument('--no-start', action='store_true', help='install only; `join start` later')
+    sp.add_argument('--dry-run', action='store_true', help='show what would be written')
+    sp.set_defaults(func=cmd_join_install, writes=True)
+    sp = jsub.add_parser('start', help='join now (needed after every reboot on stock firmware)')
+    sp.set_defaults(func=cmd_join_start)
+    sp = jsub.add_parser('status', help='what is installed and how the last join went')
+    sp.set_defaults(func=cmd_join_status)
+    sp = jsub.add_parser('remove', help='delete everything `join install` put on /mnt/Flash')
+    sp.set_defaults(func=cmd_join_remove)
 
     sp = sub.add_parser('led', help='front status LED (LEDc): show, or set auto/amber/green')
     sp.add_argument('state', nargs='?', metavar='auto|amber|green|show|N',

@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# $NetBSD: rc,v 1.162 2003/01/04 15:27:43 lukem Exp $
+# + autorun hook (airport-express-tools, see docs/autorun.md)
+
+export HOME=/
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+umask 022
+
+. /etc/rc.subr
+. /etc/rc.conf
+_rc_conf_loaded=true
+
+if ! checkyesno rc_configured; then
+	echo "/etc/rc.conf is not configured.  Multiuser boot aborted."
+	exit 1
+fi
+
+if [ "$1" = autoboot ]; then
+	autoboot=yes
+	rc_fast=yes	# run_rc_command(): do fast booting
+fi
+
+stty status '^T'
+
+trap : INT
+trap "echo 'Boot interrupted.'; exit 1" QUIT
+
+date
+
+files=$(rcorder -s nostart ${rc_rcorder_flags} /etc/rc.d/*)
+
+for _rc_elem in $files; do
+	run_rc_script $_rc_elem start
+done
+
+# autorun.sh must delete autorun.try once healthy; a leftover .try means
+# the last run never finished, so autorun is switched off (autorun.off).
+A=/mnt/Flash/autorun
+if [ -f $A.sh -a ! -f $A.off ]; then
+	if [ -f $A.try ]; then
+		mv $A.try $A.off
+	else
+		: > $A.try
+		sh $A.sh </dev/null >/dev/null 2>&1 &
+	fi
+fi
+
+date
+exit 0

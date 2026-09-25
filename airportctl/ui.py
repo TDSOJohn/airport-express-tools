@@ -19,6 +19,7 @@ import datetime
 import io
 import json
 import os
+import re
 import secrets
 import shlex
 import sys
@@ -41,7 +42,7 @@ CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline
 NEEDS_REBOOT = {'wifi.ssid', 'wifi.secure', 'wifi.hidden', 'wifi.join', 'wifi.restore',
                 'mode.ctim', 'mode.wan'}
 # Commands without a --dry-run flag: they run immediately.
-NO_DRY_RUN = {'led', 'wifi.backup', 'reboot'}
+NO_DRY_RUN = {'led', 'wifi.backup', 'reboot', 'join.start', 'join.remove'}
 
 
 def _radio(p):
@@ -82,6 +83,12 @@ ACTIONS = {
         ['wifi', 'join', f"--band={p.get('band', '2.4')}", f"--security={p.get('security', 'wpa2')}",
          f"--wifi-password={p.get('wifi_password', '')}"] + (['--psta'] if p.get('psta') else []),
         [p['ssid']]),
+    'join.install': lambda p: (
+        ['join', 'install', f"--wifi-password={p.get('wifi_password', '')}",
+         f"--ip={p.get('ip', '')}", f"--gateway={p.get('gateway', '')}"],
+        [p['ssid']]),
+    'join.start': lambda p: (['join', 'start'], []),
+    'join.remove': lambda p: (['join', 'remove'], []),
     'wifi.backup': lambda p: (['wifi', 'backup', f"--note={p.get('note') or 'manual'}"], []),
     'wifi.restore': lambda p: (['wifi', 'restore'], [_backup_file(p.get('file'))]),
     'mode.ctim': lambda p: (['mode', 'ctim'], ['now']),
@@ -208,12 +215,28 @@ def run_action(state, action, params, dry_run):
             result['ok'] = False
             result['error'] = f'error: {e}'
     result['output'] = buf.getvalue()
+    # the pre-write backup a Wi-Fi write just made, so the page can offer to undo it
+    m = re.search(r'backup(?: of the CURRENT config)?: (\S+\.cfb)', result['output'])
+    if result.get('ok') and not dry and m and os.path.isfile(m.group(1)):
+        result['backup_file'] = os.path.basename(m.group(1))
     if result['ok'] and not dry:
         if action in NEEDS_REBOOT:
             state.pending_reboot = True
         elif action == 'reboot':
             state.pending_reboot = False
     return result
+
+
+def join_status(state):
+    """`airportctl join status` for the page. Uses SSH, so it's fetched on its own."""
+    from . import join
+    with state.lock:
+        try:
+            st = join.status(state.host, state.password)
+            st['text'] = join.describe(st)
+            return st
+        except (RuntimeError, ValueError, OSError) as e:
+            return {'error': str(e)}
 
 
 def make_handler(state, token, port):
@@ -259,6 +282,8 @@ def make_handler(state, token, port):
             elif self.path == '/api/status':
                 with state.lock:
                     self._send(200, status(state))
+            elif self.path == '/api/join':
+                self._send(200, join_status(state))
             elif self.path == '/api/backups':
                 self._send(200, {'dir': wifimod.BACKUP_DIR, 'backups': backups()})
             else:

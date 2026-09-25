@@ -32,7 +32,7 @@ airportctl = "airportctl.cli:main"
 packages = ["airportctl"]
 
 [tool.setuptools.package-data]
-airportctl = ["ui.html"]
+airportctl = ["ui.html", "payload/*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "airportctl.__version__" }

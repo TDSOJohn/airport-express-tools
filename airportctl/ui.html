@@ -176,20 +176,44 @@ dialog h2 { margin-bottom: 6px; }
       <p class="hint">Use a direct cable: ACP only lightly obfuscates the admin password.</p>
     </section>
 
-    <section class="card wide">
-      <h2>Join an existing network</h2>
-      <p class="hint" style="margin:0 0 10px">Makes the Express a wireless client of your router (for AirPlay over Wi-Fi). If the join works it leaves 10.0.1.1 and takes an address on that network; if it fails it keeps its wired role.</p>
-      <div id="gate"></div>
+    <section class="card wide" id="join-card">
+      <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px">
+        <h2 style="margin:0">Join a Wi-Fi network</h2>
+        <button id="jn-check">Check status</button>
+      </div>
+      <p class="hint" style="margin:0 0 10px">Makes the Express a client of your WPA2 router, so AirPlay works on your home network. The 2.4 GHz radio joins it; the 5 GHz network stays up. This uses our own wpa_supplicant, copied to the Express's flash, because the firmware's built-in client mode doesn't work on 7.8.1.
+        Needs the <b>debug SSH login</b> turned on first (<code>dbug=0x3000</code>, see docs/dbug.md): that is a root shell guarded only by the admin password.</p>
+      <div id="jn-status" class="sub">Status not checked yet.</div>
       <div class="row" style="margin-top:10px; align-items:flex-end">
-        <label class="f">Network to join<input type="text" id="join-ssid" maxlength="32" autocomplete="off"></label>
-        <label class="f">Its password<input type="password" id="join-pw" autocomplete="new-password"></label>
-        <label class="f" style="flex:0 1 110px">Band<select id="join-band"><option value="2.4">2.4 GHz</option><option value="5">5 GHz</option></select></label>
-        <label class="f" style="flex:0 1 140px">Security<select id="join-sec"><option value="wpa2">WPA2</option><option value="mixed">WPA/WPA2</option><option value="wpa">WPA</option><option value="open">Open</option></select></label>
+        <label class="f">Network to join<input type="text" id="jn-ssid" maxlength="32" autocomplete="off"></label>
+        <label class="f">Its password<input type="password" id="jn-pw" autocomplete="new-password"></label>
       </div>
-      <div class="row" style="margin-top:10px; justify-content:space-between; align-items:center">
-        <label class="check"><input type="checkbox" id="join-psta"> Bridge wired clients onto it (proxy-STA)</label>
-        <button class="primary" id="join-go">Review…</button>
+      <div class="row" style="margin-top:10px; align-items:flex-end">
+        <label class="f">Express address on it<input type="text" id="jn-ip" placeholder="e.g. 192.168.1.250" autocomplete="off"></label>
+        <label class="f">Router address<input type="text" id="jn-gw" placeholder="e.g. 192.168.1.1" autocomplete="off"></label>
+        <button class="primary" id="jn-go">Join…</button>
       </div>
+      <p class="hint">Pick an address outside the router's DHCP range. Only the key derived from the password is stored on the Express, never the password itself.</p>
+      <div class="row" style="margin-top:10px">
+        <button id="jn-start" hidden>Join again now</button>
+        <button id="jn-remove" class="danger" hidden>Remove from the Express…</button>
+      </div>
+
+      <details class="action" id="native-join">
+        <summary class="sub" style="cursor:pointer">Experimental: the firmware's built-in client mode</summary>
+        <p class="hint warn-t" style="margin:8px 0 10px"><b>Doesn't connect on firmware 7.8.1:</b> Apple's own wpa_supplicant crashes at startup (docs/join-mode.md). Writing this also switches the other radio off, so after the reboot you lose that network and gain nothing. It's here for research; undo it by restoring the backup it makes.</p>
+        <div id="gate"></div>
+        <div class="row" style="margin-top:10px; align-items:flex-end">
+          <label class="f">Network to join<input type="text" id="join-ssid" maxlength="32" autocomplete="off"></label>
+          <label class="f">Its password<input type="password" id="join-pw" autocomplete="new-password"></label>
+          <label class="f" style="flex:0 1 110px">Band<select id="join-band"><option value="2.4">2.4 GHz</option><option value="5">5 GHz</option></select></label>
+          <label class="f" style="flex:0 1 140px">Security<select id="join-sec"><option value="wpa2">WPA2</option><option value="mixed">WPA/WPA2</option><option value="wpa">WPA</option><option value="open">Open</option></select></label>
+        </div>
+        <div class="row" style="margin-top:10px; justify-content:space-between; align-items:center">
+          <label class="check"><input type="checkbox" id="join-psta"> Bridge wired clients onto it (proxy-STA)</label>
+          <button id="join-go">Review…</button>
+        </div>
+      </details>
     </section>
 
     <section class="card wide">
@@ -425,8 +449,14 @@ async function review(action, params, title, sub) {
     const res = await api('run', { action, params, dry_run: false });
     log(res);
     if (!res.ok) await dialog(title + ': failed', '', res, null);
+    else if (action === 'wifi.join' && res.backup_file) {
+      const undo = await dialog('Stored: undo it?',
+        'The built-in join is stored but not applied (that needs a reboot), and it will not connect on 7.8.1. Undo restores the backup taken just before.',
+        { command: 'airportctl wifi restore ' + res.backup_file }, 'Undo (restore backup)');
+      if (undo) log(await api('run', { action: 'wifi.restore', params: { file: res.backup_file }, dry_run: false }));
+    }
     for (const id of ['ssid-name', 'bs-name']) delete $(id).dataset.edited;
-    for (const id of ['ssid-pw', 'sec-secret', 'join-pw']) $(id).value = '';
+    for (const id of ['ssid-pw', 'sec-secret', 'join-pw', 'jn-pw']) $(id).value = '';
   } finally {
     setBusy(false);
   }
@@ -471,8 +501,63 @@ $('join-go').onclick = () => review('wifi.join',
   { ssid: $('join-ssid').value, wifi_password: $('join-pw').value, band: $('join-band').value,
     security: $('join-sec').value, psta: $('join-psta').checked },
   'Join ' + ($('join-ssid').value || 'a network'),
-  'Nothing has been written yet. After writing, reboot to make the Express try the join.');
+  'Experimental: this does not connect on firmware 7.8.1, and it turns the other radio off. Nothing has been written yet.');
 $('backup-go').onclick = () => direct('wifi.backup', { note: 'manual' });
+
+// --- join (our supplicant, over SSH) ---------------------------------------
+
+let J = null;            // last /api/join
+const JOIN_BADGE = { 'joined': 'ok', 'joining': 'warn', 'failed': 'bad', 'not installed': null };
+
+function renderJoin() {
+  const box = $('jn-status');
+  box.replaceChildren();
+  const j = J || {};
+  $('jn-start').hidden = $('jn-remove').hidden = true;
+  if (j.error) { box.append(h('span', { class: 'bad-t' }, j.error)); return; }
+  if (!J) { box.append('Status not checked yet.'); return; }
+  const cls = j.state in JOIN_BADGE ? JOIN_BADGE[j.state] : 'warn';
+  box.append(h('div', {}, cls ? h('span', { class: 'badge ' + cls }, j.state) : h('b', {}, j.state),
+    j.ip ? ' ' + (j.ssid ? '“' + j.ssid + '”' : 'network') + ' as ' + j.ip + ' via ' + j.gateway : '',
+    j.state === 'not installed' ? '' : (j.boot_hook
+      ? (j.disabled ? ' · rejoin at boot is switched OFF by the failsafe' : ' · rejoins at every boot')
+      : ' · stock firmware: rejoin by hand after each reboot')));
+  if (j.log && j.log.length) box.append(highlight(j.log.join('\n')));
+  if (j.ip && document.activeElement !== $('jn-ip') && !$('jn-ip').value) $('jn-ip').value = j.ip;
+  if (j.gateway && document.activeElement !== $('jn-gw') && !$('jn-gw').value) $('jn-gw').value = j.gateway;
+  if (j.ssid && !$('jn-ssid').value) $('jn-ssid').value = j.ssid;
+  const installed = j.state !== 'not installed';
+  $('jn-start').hidden = !installed || ['joined', 'joining'].includes(j.state);
+  $('jn-remove').hidden = !installed;
+}
+
+async function checkJoin(pollJoining) {
+  $('jn-status').textContent = 'Checking over SSH…';
+  const start = Date.now();
+  for (;;) {
+    J = await api('join');
+    renderJoin();
+    if (!pollJoining || J.error || J.state !== 'joining' || Date.now() - start > 120000) break;
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  await refresh();         // the LED follows the join
+}
+
+$('jn-check').onclick = () => checkJoin(false);
+$('jn-go').onclick = async () => {
+  await review('join.install',
+    { ssid: $('jn-ssid').value, wifi_password: $('jn-pw').value, ip: $('jn-ip').value, gateway: $('jn-gw').value },
+    'Join ' + ($('jn-ssid').value || 'a network'),
+    'Nothing has been written yet. Copies the supplicant and this network to the Express, then joins (about 45 s).');
+  checkJoin(true);
+};
+$('jn-start').onclick = async () => { await direct('join.start', {}); checkJoin(true); };
+$('jn-remove').onclick = async () => {
+  const go = await dialog('Remove the join from the Express?',
+    'Deletes the supplicant and the stored network from its flash. A join that is running stays up until the next reboot.',
+    { command: 'airportctl join remove' }, 'Remove');
+  if (go) { await direct('join.remove', {}); checkJoin(false); }
+};
 document.querySelectorAll('#led button').forEach(b => b.onclick = () => direct('led', { state: b.dataset.led }));
 $('log-clear').onclick = () => $('log').replaceChildren();
 $('refresh').onclick = () => { refresh(); renderBackups(); };
@@ -518,6 +603,7 @@ async function refresh() {
 
 refresh();
 renderBackups();
+checkJoin(false);
 </script>
 </body>
 </html>

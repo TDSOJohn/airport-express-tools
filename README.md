@@ -40,6 +40,7 @@ undone.
 | Clients can't connect after a Wi-Fi change | `python3 -m airportctl wifi restore backups/WiFi-pre-write-<timestamp>.cfb --reboot` |
 | After `wifi join` it broadcasts the *target* network's name as an access point | The same restore. `wifi join` refuses this case unless forced with `--force`; see [below](#the-interesting-bit-join-a-wireless-network) |
 | You ran `crossdev/wpa-build/join-test.sh` | `tools/essh.sh /sbin/reboot`, or unplug it. It changes nothing that is stored |
+| You ran `airportctl join` and want it gone | `airportctl join remove`, then reboot. It changes no stored setting, only files on `/mnt/Flash` |
 | It's unreachable at 10.0.1.1 after `mode sharing bridge` or `dhcp` | It no longer runs DHCP on the cable. Run `python3 tools/find_express.py`, or a DHCP server on that interface |
 | You forgot the admin password | Soft reset (below) |
 | Nothing above works | Hard reset, then factory reset |
@@ -107,9 +108,17 @@ Express then joins a normal WPA2 router on 2.4 GHz and plays **AirPlay on your h
 its 5 GHz AP still up. It lasts until the next reboot:
 
 ```sh
-cd crossdev && ./setup.sh && wpa-build/build-wpa.sh
-wpa-build/join-test.sh HomeWiFi NM-PROFILE-UUID 192.168.1.250 192.168.1.1
+airportctl join install HomeWiFi --wifi-password @~/.wifipw --ip 192.168.1.250 --gateway 192.168.1.1
+airportctl join status
 ```
+
+`airportctl join` ships the prebuilt 295 KB supplicant (`airportctl/payload/`, BSD licence
+notice included), stores it with the network (PMK only) on the Express's `/mnt/Flash`, and
+joins over the debug SSH login, which you have to turn on yourself ([docs/dbug.md](docs/dbug.md)).
+On stock firmware the join lasts until the next reboot (`airportctl join start` redoes it); the
+[autorun](docs/autorun.md) image makes it rejoin at every boot. To build the supplicant
+yourself: `cd crossdev && ./setup.sh && wpa-build/build-wpa.sh` (`wpa-build/join-test.sh` is
+the original RAM-only test).
 
 The full derivation — the device-role formula, the `waCV` WAN-uplink bits, the supplicant config
 generator, the exact crash chain and the replacement — is in [docs/join-mode.md](docs/join-mode.md);
@@ -119,18 +128,18 @@ the build and the kernel ABI table are in [crossdev/wpa-build/](crossdev/wpa-bui
 > inspection and backup/restore all work. The client-mode **gate** opens as described (the radio
 > enters station mode), but the **built-in join is not fixable from configuration** — the
 > firmware's `wpa_supplicant` crashes at launch. The **replacement supplicant works** (WPA2-PSK,
-> AirPlay on the joined network), but it lives in RAM: every reboot needs `join-test.sh` again over
-> SSH. For a set-and-forget setup, feed the Express's WAN/LAN port from a small Wi-Fi→Ethernet
+> AirPlay on the joined network). On stock firmware every reboot needs `airportctl join start`
+> again over SSH; the autorun image (built, not yet flashed) removes that. For a set-and-forget setup, feed the Express's WAN/LAN port from a small Wi-Fi→Ethernet
 > bridge instead.
 
 ## Contents
 
 | path | what |
 |---|---|
-| `airportctl/` | the CLI: `wifi show/ssid/secure/hidden/join/backup/restore`, `mode`, `rpc`, `led`, `name`, `info`, `reboot`, and `ui` (the same commands as a local web page). Python 3 stdlib only. See its [README](airportctl/README.md). |
-| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [properties](docs/properties.md) (the full 520-property dictionary, each read live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [boot](docs/boot.md) (the flash map and boot chain — and why the A1392 has no secure boot), [firmware](docs/firmware.md) (unpacking Apple's `.basebinary` on Linux — decrypt + gunzip + FFS — and what 7.8.1 changed: AirPlay 2 added, TLS frozen at 2007), [security](docs/security.md) (the consolidated security profile — live attack surface, the 2007 crypto stack, firmware/control-plane/SSH/RF/physical trust boundaries, and a threat model), [hardware](docs/hardware.md) (the board: SoC, radios, the flash chip and its partitions, the serial/JTAG header), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
+| `airportctl/` | the CLI: `wifi show/ssid/secure/hidden/join/backup/restore`, `join` (our supplicant over SSH; the prebuilt binary is in `payload/`), `mode`, `rpc`, `led`, `name`, `info`, `reboot`, and `ui` (the same commands as a local web page). Python 3 stdlib only. See its [README](airportctl/README.md). |
+| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [properties](docs/properties.md) (the full 520-property dictionary, each read live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [boot](docs/boot.md) (the flash map and boot chain — and why the A1392 has no secure boot), [firmware](docs/firmware.md) (unpacking Apple's `.basebinary` on Linux — decrypt + gunzip + FFS — and what 7.8.1 changed: AirPlay 2 added, TLS frozen at 2007), [autorun](docs/autorun.md) (a one-hook custom image that runs `/mnt/Flash/autorun.sh` at boot, with a failsafe; built offline, not yet flashed), [security](docs/security.md) (the consolidated security profile — live attack surface, the 2007 crypto stack, firmware/control-plane/SSH/RF/physical trust boundaries, and a threat model), [hardware](docs/hardware.md) (the board: SoC, radios, the flash chip and its partitions, the serial/JTAG header), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
 | `ghidra_scripts/` | headless Ghidra scripts that produced those docs, incl. `NameFuncs.java` which recovers ~2310 function names ([README](ghidra_scripts/README.md)) |
-| `tools/` | `find_express.py`, `proptab.py` (dump the 520-entry ACP property table), `essh.sh` (debug shell), `mdns_probe.py`, `wait_for_reboot.py`, `pcap_summary.py`, `decrypt_basebinary.py` + `ufs1.py` (unpack a `.basebinary` offline — see [firmware](docs/firmware.md)) |
+| `tools/` | `find_express.py`, `proptab.py` (dump the 520-entry ACP property table), `essh.sh` (debug shell), `mdns_probe.py`, `wait_for_reboot.py`, `pcap_summary.py`, `decrypt_basebinary.py` + `ufs1.py` (unpack a `.basebinary` offline — see [firmware](docs/firmware.md)), `repack_basebinary.py` (rebuild one with a replaced ramdisk file — see [autorun](docs/autorun.md)) |
 | `crossdev/` | cross-compile and run your own C on the device (NetBSD 4.0, mipseb) — see its [README](crossdev/README.md) |
 | `crossdev/wpa-build/` | the replacement `wpa_supplicant`: build script, kernel-ABI shims, and `join-test.sh` — see its [README](crossdev/wpa-build/README.md) |
 
@@ -161,6 +170,34 @@ on Windows, `~/Library/Application Support/airportctl/backups` on macOS).
 Connect your machine to the Express's **LAN** port (`‹•••›`), not the WAN port, with a profile
 that never takes the default route — see [docs/extracting-acpd.md](docs/extracting-acpd.md) §1
 for the `nmcli` recipe. Defaults are host `10.0.1.1`, admin password `public`.
+
+## Web UI
+
+`airportctl ui` opens the everyday commands as a local web page:
+
+```sh
+airportctl ui                    # or: python3 -m airportctl ui
+airportctl ui --no-browser       # print the link instead of opening it
+airportctl ui --port 8765        # pick the port
+```
+
+It's a small bridge on your machine (a browser can't talk ACP directly). The page covers
+network name, security, visibility, base-station name, the status light, joining a Wi-Fi
+network, Wi-Fi backups and reboot. Every change is turned into the equivalent `airportctl`
+command line and run by the CLI itself, so you get the same checks, backups and messages. Writes
+show a review step first, and the log shows the command each one ran.
+
+* **Local only.** It listens on `127.0.0.1`, accepts only that host name, and every request needs
+  a one-time token that comes in the link it opens. Use that link rather than typing the
+  address. The admin password stays in the bridge process and is never sent to the page.
+* **Wi-Fi changes apply after a reboot**, as on the command line. The page says so after each
+  write and has a Reboot button. The status light changes at once.
+* **"Join a Wi-Fi network"** runs `airportctl join` ([above](#the-interesting-bit-join-a-wireless-network)): our own supplicant, over SSH,
+  no reboot. It needs the debug SSH login turned on first; the card says so if it isn't.
+* The firmware's **built-in client mode** sits in an "Experimental" fold. It doesn't connect
+  on 7.8.1 (its supplicant crashes)
+  and it switches the other radio off, so after a write the page offers **Undo**, which
+  restores the backup taken just before.
 
 ## Safety
 
