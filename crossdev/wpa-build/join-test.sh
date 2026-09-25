@@ -5,6 +5,7 @@
 # Runs from the laptop over the Express's LAN cable (tools/essh.sh). Verified 2026-09-23.
 #
 # Usage: ./join-test.sh SSID NM-CONNECTION-UUID STATIC-IP GATEWAY
+#   (WPA_BIN=path overrides the binary to upload)
 #   e.g. ./join-test.sh HomeWiFi "$(nmcli -g connection.uuid c show HomeWiFi)" 192.168.1.250 192.168.1.1
 #   (pick an address outside the router's DHCP pool)
 #
@@ -22,7 +23,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ESSH=$HERE/../../tools/essh.sh
 SSID=${1:?usage: join-test.sh SSID NM-UUID STATIC-IP GATEWAY}
 UUID=${2:?}; IP=${3:?}; GW=${4:?}
-BIN=$HERE/wpa_supplicant-0.7.3/wpa_supplicant/wpa_supplicant
+BIN=${WPA_BIN:-$HERE/wpa_supplicant-0.7.3/wpa_supplicant/wpa_supplicant}
 [ -x "$BIN" ] || { echo "build it first: $HERE/build-wpa.sh" >&2; exit 1; }
 
 SSID="$SSID" UUID="$UUID" python3 - <<'EOF' | "$ESSH" 'umask 077; cat > /mnt/Memory/wpa.conf'

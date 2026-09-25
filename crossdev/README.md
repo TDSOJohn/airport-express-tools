@@ -66,10 +66,22 @@ symbol table (`ksyms.bin`, read from `/dev/ksyms`).
 - **The network is the practical store.** Programs get full sockets from libc, and `curl` is on the
   Express. Data can live on the laptop or a NAS and be fetched into `/mnt/Memory` when needed. Free RAM
   (~15 MB) limits how much can be held at once.
-- **`/mnt/Flash` survives power-off.** The SSH host keys stored there were identical on 2026-09-14 and
-  2026-09-15. It has ~988 KB free, enough for a few small stripped tools, next to `ACPData.bin` (ACPd's
-  data, likely the saved settings). Two caveats: at boot `rc.d/flash` erases and reformats the partition
-  if it fails to mount, and filling it could stop ACPd saving. Keep what you put there small.
+- **`/mnt/Flash` keeps your files, even through power cuts.** It's FFS on `/dev/flash2a`, mounted
+  `rw,noatime,sync`, with ~988 KB free next to `ACPData.bin` (ACPd's saved settings) and the `sshd` host
+  keys. Tested on 2026-09-25: files written there came back byte-identical after a soft reboot, after
+  pulling the plug while idle, and after pulling it during a loop that kept rewriting a 512 KB file. That
+  file came back empty (the write in progress was lost), but the filesystem was consistent, nothing else
+  changed and the partition wasn't reformatted. Things to know:
+  - At boot `rc.d/flash` runs `fsck -y`, and if the mount still fails it **erases and reformats the
+    partition**, losing all settings (Wi-Fi, admin password, `dbug`, so SSH goes off) and the host keys.
+    It didn't happen in testing, but back up the files first (`cat` each one over `../tools/essh.sh`).
+  - **Sustained writes block SSH logins.** While the 512 KB rewrite loop ran, `sshd` sent its banner but
+    hung before authentication for minutes (it reads the host keys from `/mnt/Flash` for every login);
+    ping and ACP kept working. Write rarely, and keep writes small.
+  - ACPd rewrites `ACPData.bin` at boot (a header checksum and a few bytes change), so check it by
+    reading the settings back, not by comparing hashes.
+  - Leave headroom so ACPd can keep saving. There is no `gzip`/`zcat` on the device to unpack a
+    compressed payload.
 - **Nothing starts automatically.** Boot runs `/etc/rc.d/*` and cron from the firmware image; no script
   touches `/mnt/Flash` except to check and mount it. After every reboot a program has to be started over
   SSH (for example with `run.sh`).

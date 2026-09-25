@@ -4,7 +4,7 @@
 set -eu
 SR=$(cd "$(dirname "$0")/../sysroot" && pwd)
 L=$SR/usr/lib
-COMMON="-EB -mabi=32 -march=mips1 -mtune=24kc -static -no-pie -Wl,--build-id=none -Wl,-e,__start -msoft-float -mabicalls -fPIC"
+COMMON="-EB -mabi=32 -march=mips1 -mtune=24kc -static -no-pie -Wl,--build-id=none -Wl,--gc-sections -Wl,-e,__start -msoft-float -mabicalls -fPIC"
 out=""; objs=""; libs=""
 while [ $# -gt 0 ]; do
   case "$1" in

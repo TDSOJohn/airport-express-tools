@@ -52,8 +52,11 @@ Two consequences worth internalising:
 * **The root filesystem is a RAM disk.** `/` is `/dev/md0a` (a ~11.5 MB FFS image, 93 %
   full) unpacked into RAM at boot from the active bank. **Changes to `/` do not
   survive a reboot.** The *only* persistent store is `flash2` → `/mnt/Flash` (~1 MB
-  usable), which holds the ACP property blob (`ACPData.bin`), the persisted `sshd`
-  host keys, the TLS material (`server.p12`, `ca.*`), and DHCP leases. `/mnt/Memory`
+  usable), which holds the ACP property blob (`ACPData.bin`) and the persisted `sshd`
+  host keys. ACPd also keeps TLS material (`server.p12`, `ca.*`) and DHCP leases there
+  when those features are used; on our unit only the first two exist. Files you add
+  there survive power cuts, even mid-write (tested; see
+  [crossdev § Storage](../crossdev/README.md#storage-usb-and-persistence)). `/mnt/Memory`
   is an `mfs` scratch tmpfs.
 * **There are two full copies of the firmware.** `flash0` and `flash1` are identical
   7 MB banks — this is what makes an interrupted update survivable (below).

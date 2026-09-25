@@ -220,7 +220,9 @@ The passphrase never leaves the laptop: the harness sends only the derived PMK, 
 - **Not persistent.** Everything lives in the RAM disk; any reboot or power cut restores the stock
   AP setup and the harness must be re-run over SSH (cable, or via the Express's own AP). Nothing on
   the device autostarts from writable storage — see
-  [crossdev § Storage](../crossdev/README.md#storage-usb-and-persistence).
+  [crossdev § Storage](../crossdev/README.md#storage-usb-and-persistence). `/mnt/Flash` does keep
+  files through power cuts, and the supplicant is now small enough (~295 KB of the ~988 KB free)
+  to live there and skip the upload. Something still has to start it after each boot.
 - **Static address.** Running `dhclient` on the station interface made the debug `sshd` stall for
   minutes before auth (most likely reverse DNS after `resolv.conf` changed), so the harness uses a
   static IP outside the router's pool.

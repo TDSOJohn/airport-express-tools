@@ -7,14 +7,16 @@
 # net80211 (scan requests, APPIE) --- the 802.11 ABI Apple's kernel really has
 # (0.6.5, the version Apple shipped, associates but can't scan or send its RSN IE).
 # No edits to upstream source: compat/ shim headers fix the kernel ABI, compat/libc/
-# replaces two libc.a objects (getifaddrs, soft-float setjmp), ldnetbsd.sh links.
+# replaces three libc.a objects (getifaddrs, soft-float setjmp, a getgrnam stub),
+# compat/l2_packet/ adds a libpcap-free EAPOL backend, ldnetbsd.sh links.
 # VERIFIED ON HARDWARE 2026-09-23: completes the WPA2-PSK 4-way handshake with a
-# third-party AP (CTRL-EVENT-CONNECTED) from a managed vap on ath0.
+# third-party AP (CTRL-EVENT-CONNECTED) from a managed vap on ath0. The small
+# (raw-BPF) build below re-verified 2026-09-25 with join-test.sh: joins, pings, AirPlay.
 #
 # Prereqs: crossdev/setup.sh has populated ../sysroot (NetBSD 4.0 headers+libs),
 #          Debian's gcc-mips-linux-gnu is installed.
 #
-# Output: wpa_supplicant-0.7.3/wpa_supplicant/wpa_supplicant  (stripped, ~958 KB)
+# Output: wpa_supplicant-0.7.3/wpa_supplicant/wpa_supplicant  (stripped, ~295 KB)
 #         .../wpa_supplicant.dbg                               (unstripped)
 set -eu
 
@@ -52,12 +54,15 @@ echo "8879a0471bb5b41b120794f956bee315a2d1e2cd613280c3b84d930754767504  $GIA" | 
 
 # 2. drop in the minimal PSK .config ----------------------------------------
 # WPA2-PSK only: BSD net80211 driver, no 802.1X/EAP (so no eapol_sm, no OpenSSL).
+# L2_PACKET=bpf is compat/l2_packet/l2_packet_bpf.c: EAPOL over raw /dev/bpf with a
+# fixed filter. libpcap (L2_PACKET=freebsd) works too, but its filter compiler links
+# libc's resolver, NIS, SunRPC and Berkeley DB statically: ~958 KB instead of ~295 KB.
 # With no EAP, TLS=internal pulls in just tls_none + internal AES/SHA1/MD5/RC4 ---
 # everything the 4-way handshake needs (0.7.3's TLS=none links no hash code at all).
 cat > "$SRC/wpa_supplicant/.config" <<'EOF'
 # AirPort Express (NetBSD 4.0 mipseb) minimal WPA2-PSK supplicant
 CONFIG_DRIVER_BSD=y
-CONFIG_L2_PACKET=freebsd
+CONFIG_L2_PACKET=bpf
 CONFIG_TLS=internal
 CONFIG_INTERNAL_LIBTOMMATH=y
 CONFIG_CTRL_IFACE=y
@@ -88,16 +93,29 @@ XCC="$CC -EB -mabi=32 -march=mips1 -mtune=24kc -msoft-float -mabicalls -fPIC \
 GIAO=$HERE/compat/libc/getifaddrs.o
 $XCC -O2 -I"$HERE/compat/libc" -c -o "$GIAO" "$GIA"
 # libc.a's __setjmp14 saves FPU registers (traps: no FPU); libpcap's pcap_compile()
-# calls it. This soft-float copy replaces it the same way.
+# calls it. This soft-float copy replaces it the same way. Only reached with
+# L2_PACKET=freebsd; the bpf build doesn't call setjmp and --gc-sections drops it.
 SJO=$HERE/compat/libc/setjmp_softfloat.o
 $XCC -c -o "$SJO" "$HERE/compat/libc/setjmp_softfloat.S"
+# libc.a's getgrnam() alone drags in NIS, hesiod, the resolver, SunRPC and Berkeley DB;
+# the control interface calls it only for ctrl_interface_group, which we never set.
+GGO=$HERE/compat/libc/getgrnam_stub.o
+$XCC -Os -c -o "$GGO" "$HERE/compat/libc/getgrnam_stub.c"
+
+# l2_packet over raw /dev/bpf: a new file, so upstream sources stay unedited.
+cp "$HERE/compat/l2_packet/l2_packet_bpf.c" "$SRC/src/l2_packet/"
 
 cd "$SRC/wpa_supplicant"
 make clean >/dev/null 2>&1 || true
-make -j"$(nproc)" wpa_supplicant CC="$XCC" LDO="$HERE/ldnetbsd.sh $GIAO $SJO"
+# CFLAGS from the environment: the Makefile sets it only if unset, then appends to it.
+# -Os + per-function sections (ldnetbsd.sh links with --gc-sections) trim our own code;
+# the 2007 libc.a/libpcap.a have no per-function sections, so that part stays as is.
+CFLAGS="-MMD -Os -ffunction-sections -fdata-sections -Wall" \
+	make -j"$(nproc)" wpa_supplicant CC="$XCC" LDO="$HERE/ldnetbsd.sh $GIAO $SJO $GGO"
 
 cp wpa_supplicant wpa_supplicant.dbg
-mips-linux-gnu-strip wpa_supplicant
+# .pdr/.comment/.ident are never loaded; plain strip keeps them (~100 KB).
+mips-linux-gnu-strip -R .pdr -R .comment -R .ident -R .gnu.attributes wpa_supplicant
 echo
 echo "built: $SRC/wpa_supplicant/wpa_supplicant  ($(stat -c %s wpa_supplicant) bytes, stripped)"
 file wpa_supplicant
