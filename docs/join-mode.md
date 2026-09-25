@@ -207,8 +207,8 @@ LAN cable, ~70 s:
 2. Give `wlan2` a static address, then take it **down**, then start the supplicant. 0.7.3's
    `driver_bsd` downs the interface during init and reads its own `RTM_IFINFO` as "interface removed",
    which closes its EAPOL socket — it then associates forever but never hears 4-way message 1/4.
-   Starting from a down interface avoids that. (Set the address *before*: `SIOCSIFADDR` re-inits the
-   vap and drops installed keys.)
+   Starting from a down interface avoids that. (Setting the address first is only the simplest
+   order: it can also change after the handshake, see [Addressing](#addressing-dhcp).)
 3. `kill -CONT` ACPd. It leaves `wlan2` alone.
 4. Restart `/sbin/airtunesd -i wlan2`: it registers `_raop`/`_airplay` only on its `-i` interface
    (default `bridge0`), and ACPd doesn't respawn it.
@@ -223,12 +223,68 @@ The passphrase never leaves the laptop: the harness sends only the derived PMK, 
   [crossdev § Storage](../crossdev/README.md#storage-usb-and-persistence). `/mnt/Flash` does keep
   files through power cuts, and the supplicant is now small enough (~295 KB of the ~988 KB free)
   to live there and skip the upload. Something still has to start it after each boot.
-- **Static address.** Running `dhclient` on the station interface made the debug `sshd` stall for
-  minutes before auth (most likely reverse DNS after `resolv.conf` changed), so the harness uses a
-  static IP outside the router's pool.
+- **Addressing:** `join-test.sh` uses a fixed address; `airportctl join` uses DHCP by default,
+  see [below](#addressing-dhcp).
 - **Leaf only.** A 3-address station can't bridge other hosts' frames, so the Express's LAN port and
   AP are *not* joined to the home network — only its own services (AirPlay) move there.
 - **WPA2-PSK only.** No SAE (WPA3), no PMF, no EAP — a 2010 supplicant, built minimal.
+
+### Addressing (DHCP)
+
+**Setting an address does *not* drop the WPA keys.** Earlier notes claimed it did (that
+`SIOCSIFADDR` re-inits the vap). That was an inference from a first join with no GTK, which
+a supplicant restart fixed. The real cause was the EAPOL-socket bug in step 2 above: the
+handshake never completed. Tested on 2026-09-25 on a keyed `wlan2` (fixed-address join to the
+router): adding an alias, removing it, removing the only IPv4 address, adding it back, and
+replacing it with plain `ifconfig wlan2 inet A netmask M` all left `AES-CCM 2:128-bit`
+installed, with router pings at 5/5 and the address reachable from the LAN. AirPlay stayed
+advertised throughout. So a lease can simply be set on the live link.
+
+**The stock `/sbin/dhclient` is tied to ACPd,** so it isn't used. It is ISC dhclient 4.1.0
+with Apple changes (the crunched binary's `main` is `FUN_00556de0`). At startup it connects to
+ACPd and registers `dhcp.client.interface.state`/`dhcp.client.lease.action`, the same names the
+ACPd-launched instance on `bridge0` already holds. On every IPv4 bind (`FUN_00554d84`) it sends
+`dhcp.client.lease.accept` to ACPd's WAN state machine, and no flag turns that off. Its exit hook also runs `acp-update-network` and `dns-update-script`, and its
+`dhclient-script` sets `0.0.0.0` in `PREINIT`. This is the likely cause of the sshd stall seen
+when `dhclient -d wlan2` was tried, rather than DNS alone.
+
+So `airportctl join` uses its own client, [`crossdev/src/dhcpc.c`](../crossdev/src/dhcpc.c)
+(raw `/dev/bpf`, 120 KB static). It runs once and only *reports* the lease as shell variables.
+It never touches the interface, routes or `resolv.conf`. `autorun.sh` then:
+
+1. joins with **no address** on `wlan2` (created, up, down, supplicant);
+2. runs `dhcpc` (DISCOVER → OFFER → REQUEST → ACK; its retransmits cover the handshake
+   still running after `status: associated`);
+3. sets the leased address on the live link and pings the router. Only if the router stays
+   silent for ~10 s does it **re-key** as a fallback: it freezes ACPd, stops the supplicant,
+   sets the address, brings `wlan2` down and starts the supplicant again (the fixed-address
+   order);
+4. moves AirPlay, and leaves a loop behind that renews at T1 (unicast to the server, then
+   broadcast, then a fresh DISCOVER, retrying every minute) and applies a changed address the
+   same way. The loop logs to `/mnt/Memory/dhcp.log`; the lease is in
+   `/mnt/Memory/lease`.
+
+No default route is added and `resolv.conf` is left alone, as on the fixed-address path: AirPlay
+only needs the local subnet. If no server answers, `FALLBACK_IP` (with `GW`/`MASK`) from
+`join.conf` is used when set; otherwise the run fails (amber LED) with the 5 GHz AP and Ethernet
+still up. There is no ARP conflict check (no DHCPDECLINE). A DHCP reservation on the router
+keeps the AirPlay address stable across reboots.
+
+**Status:** `crossdev/tests/dhcpc-test.sh` runs the client logic against
+busybox `udhcpd` in a network namespace (INIT, INIT-REBOOT, unicast renew, broadcast rebind, NAK,
+timeout). `tests/autorun-mock.sh` runs `autorun.sh` with stubbed device commands and checks the
+order of operations. On the Express (2026-09-25): the address tests above (T1), and `dhcpc` on
+the keyed `wlan2` against a Fastweb router (T3). It got a lease in ~3 s. INIT-REBOOT, unicast
+renew, broadcast rebind and a NAK for a foreign address all behaved as in the offline test, and
+the interface was left untouched. Then the full path (T4): `airportctl join install` with DHCP,
+reboot, `join start`. It joined in 61 s (20 s of that is the post-boot settle wait), leased
+`.143`, set it on the live link with no re-key needed, answered 30/30 pings from the LAN, and
+AirPlay was advertised at the new address (a PipeWire RAOP sink appeared for it). A renewal,
+forced by killing the loop's `sleep`, renewed `.143` in place with no link change (T5). Unicast
+renews then got an immediate ACK; the retransmit seen in T3 came from the address not being on
+the interface yet. This router answers renewals with a fresh 24 h lease but T1/T2 counted from
+the original binding, and the loop follows them. After a power cycle, `join start` got `.143`
+again (80 s, 20/20 pings).
 
 ## Recipe: the firmware's own join (reproduces the crash)
 

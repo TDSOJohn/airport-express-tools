@@ -16,8 +16,9 @@
 # Disruptive until the Express reboots: briefly freezes ACPd (SIGSTOP), kills the 2.4 GHz hostapd,
 # destroys wlan0 and creates a managed vap wlan2 on ath0 (one vap per radio). No stored
 # configuration is changed, so `/sbin/reboot` (or a power cycle) restores everything.
-# Don't run dhclient on wlan2: its resolv.conf change made sshd stall for minutes before
-# auth (UseDNS), which cost a power cycle; and assigning the lease re-inits the vap (below).
+# Don't run the stock dhclient on wlan2: it reports to ACPd, and when tried sshd stalled for
+# minutes before auth, which cost a power cycle. `airportctl join` has its own DHCP client
+# (crossdev/src/dhcpc.c, docs/join-mode.md#addressing-dhcp).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 ESSH=$HERE/../../tools/essh.sh
@@ -50,8 +51,9 @@ sleep 1
 /sbin/ifconfig wlan0 destroy
 /sbin/ifconfig wlan2 create wlandev ath0
 /sbin/ifconfig wlan2 up
-# Address BEFORE the supplicant: SIOCSIFADDR re-inits the vap (if_init), which silently
-# drops the installed PTK/GTK, so an address set after the handshake leaves a dead link.
+# The address can go on before or after the handshake: changing addresses on the keyed link
+# keeps the keys (tested 2026-09-25). Setting it here, while the interface is still up, is
+# just the simplest order.
 /sbin/ifconfig wlan2 inet $IP netmask 255.255.255.0
 # ...and then DOWN: 0.7.3's driver_bsd downs the interface during init and takes the
 # resulting RTM_IFINFO (IFF_UP clear) for "interface removed", which deinits its EAPOL

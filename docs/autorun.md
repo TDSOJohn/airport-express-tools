@@ -118,15 +118,17 @@ once and doesn't track later link loss. `LEDc` changes live (solid green confirm
 does it over the debug SSH login, which you turn on by hand first ([dbug.md](dbug.md)):
 
 ```sh
-airportctl join install MyWiFi --wifi-password @~/.wifipw --ip 192.168.1.250 --gateway 192.168.1.1
+airportctl join install MyWiFi --wifi-password @~/.wifipw     # DHCP; or --ip A --gateway G
 airportctl join status      # installed files, rejoin at boot or not, the last run's log
 airportctl join start       # join again: after every reboot on stock firmware
 airportctl join remove      # delete it all from /mnt/Flash
 ```
 
-It copies the prebuilt supplicant shipped in the package (`airportctl/payload/`, see
-`NOTICE.txt`; skipped if the copy on Flash already matches), a `wpa.conf` with the SSID in hex
-and only the PMK, `join.conf` (IP/gateway/netmask) and `autorun.sh`, then starts the join.
+It copies the prebuilt supplicant and DHCP client shipped in the package (`airportctl/payload/`,
+see `NOTICE.txt`; each skipped if the copy on Flash already matches), a `wpa.conf` with the SSID
+in hex and only the PMK, `join.conf` (`IP=dhcp`, optionally with `FALLBACK_IP`/`GW`/`MASK`, or a
+fixed `IP`/`GW`/`MASK`) and `autorun.sh`, then starts the join. How the DHCP address is applied
+without losing the WPA keys is in [join-mode.md](join-mode.md#addressing-dhcp).
 On stock firmware that lasts until the next reboot. With the autorun image it is redone at
 every boot.
 

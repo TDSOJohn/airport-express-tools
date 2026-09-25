@@ -31,9 +31,9 @@ wifi join SSID --wifi-password PW|@FILE    become a client of an existing networ
                                            NOTE: the firmware's own supplicant crashes on 7.8.1,
                                            so this doesn't connect (../docs/join-mode.md)
             [--band 2.4|5] [--security wpa2|mixed|wpa|open] [--psta]
-join install SSID --wifi-password PW|@FILE --ip IP --gateway GW
-                                           join a WPA2 network with our own supplicant over the
-                                           debug SSH login (2.4 GHz; 5 GHz stays up); no reboot
+join install SSID --wifi-password PW|@FILE join a WPA2 network with our own supplicant over the
+            [--ip dhcp|IP --gateway GW]    debug SSH login (2.4 GHz; 5 GHz stays up); no reboot.
+            [--fallback-ip IP --gateway GW] Address from DHCP unless --ip is given
 join start | status | remove               rejoin (after each reboot on stock firmware) / show
                                            the last run / delete it from /mnt/Flash
 mode show                                  the join gate: ctim, waCV, sharing props, role

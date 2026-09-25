@@ -108,12 +108,14 @@ Express then joins a normal WPA2 router on 2.4 GHz and plays **AirPlay on your h
 its 5 GHz AP still up. It lasts until the next reboot:
 
 ```sh
-airportctl join install HomeWiFi --wifi-password @~/.wifipw --ip 192.168.1.250 --gateway 192.168.1.1
+airportctl join install HomeWiFi --wifi-password @~/.wifipw   # address from DHCP
 airportctl join status
 ```
 
+(`--ip 192.168.1.250 --gateway 192.168.1.1` gives it a fixed address instead.)
 `airportctl join` ships the prebuilt 295 KB supplicant (`airportctl/payload/`, BSD licence
-notice included), stores it with the network (PMK only) on the Express's `/mnt/Flash`, and
+notice included) and our own 120 KB DHCP client (`crossdev/src/dhcpc.c`), stores them with
+the network (PMK only) on the Express's `/mnt/Flash`, and
 joins over the debug SSH login, which you have to turn on yourself ([docs/dbug.md](docs/dbug.md)).
 On stock firmware the join lasts until the next reboot (`airportctl join start` redoes it); the
 [autorun](docs/autorun.md) image makes it rejoin at every boot. To build the supplicant

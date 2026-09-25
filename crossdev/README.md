@@ -165,6 +165,8 @@ shell has to be enabled first — see [../docs/extracting-acpd.md](../docs/extra
 | `src/overlay.c` | loads and runs machine code into an `mmap`'d buffer at runtime (the streaming primitive), verified |
 | `src/fptest.c` | the floating-point test (kept for the record; no longer links) |
 | `src/ifstat.c` | per-interface packet counters (no `netstat` on the device); needs `wpa-build`'s `getifaddrs` fix, see its header |
+| `src/dhcpc.c`, `build-dhcpc.sh` | the one-shot DHCP client `airportctl join` uses (raw `/dev/bpf`, reports the lease, never applies it; see [join-mode.md](../docs/join-mode.md#addressing-dhcp)); all modes verified on the device against a real router |
+| `tests/dhcpc-test.sh`, `tests/dhcpc_linux.h` | runs `dhcpc`'s logic on the build machine against busybox `udhcpd` in a user+network namespace (no root) |
 | `wpa-build/` | a replacement `wpa_supplicant` that joins WPA2 networks, plus the kernel-ABI shims it needed — see its [README](wpa-build/README.md) |
 | `sysroot/`, `dl/comp.tgz` | NetBSD 4.0 sgimips headers and static libraries, fetched by `setup.sh` (not in git) |
 | `build/` | build output (not in git) |

@@ -410,7 +410,8 @@ def cmd_mode_wan(args):
 def cmd_join_install(args):
     from . import join
     join.install(args.host, args.password, args.ssid, args.wifi_password, args.ip, args.gateway,
-                 netmask=args.netmask, start_now=not args.no_start, dry_run=args.dry_run)
+                 netmask=args.netmask, fallback_ip=args.fallback_ip, start_now=not args.no_start,
+                 dry_run=args.dry_run)
 
 
 def cmd_join_start(args):
@@ -503,10 +504,13 @@ def build_parser():
     sp.add_argument('ssid', help='the WPA2 network to join')
     sp.add_argument('--wifi-password', required=True, metavar='PW|@FILE',
                     help='its password; only the derived PMK is sent to the Express')
-    sp.add_argument('--ip', required=True, help="the Express's fixed address on that network "
-                                                "(pick one outside the router's DHCP pool)")
-    sp.add_argument('--gateway', required=True, help="the router's address")
-    sp.add_argument('--netmask', default='255.255.255.0')
+    sp.add_argument('--ip', default='dhcp', help="`dhcp` (default: ask the router), or a fixed "
+                                                 "address outside the router's DHCP pool")
+    sp.add_argument('--fallback-ip', metavar='IP', help='with DHCP: a fixed address to use when '
+                                                        'no DHCP server answers')
+    sp.add_argument('--gateway', help="the router's address, for a fixed --ip or --fallback-ip")
+    sp.add_argument('--netmask', default='255.255.255.0',
+                    help='for a fixed --ip or --fallback-ip (default 255.255.255.0)')
     sp.add_argument('--no-start', action='store_true', help='install only; `join start` later')
     sp.add_argument('--dry-run', action='store_true', help='show what would be written')
     sp.set_defaults(func=cmd_join_install, writes=True)

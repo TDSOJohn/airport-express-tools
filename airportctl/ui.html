@@ -189,11 +189,12 @@ dialog h2 { margin-bottom: 6px; }
         <label class="f">Its password<input type="password" id="jn-pw" autocomplete="new-password"></label>
       </div>
       <div class="row" style="margin-top:10px; align-items:flex-end">
-        <label class="f">Express address on it<input type="text" id="jn-ip" placeholder="e.g. 192.168.1.250" autocomplete="off"></label>
-        <label class="f">Router address<input type="text" id="jn-gw" placeholder="e.g. 192.168.1.1" autocomplete="off"></label>
+        <label class="f" style="flex:0 1 170px">Address<select id="jn-mode"><option value="dhcp">Automatic (DHCP)</option><option value="fixed">Fixed</option></select></label>
+        <label class="f"><span id="jn-ip-label">Express address</span><input type="text" id="jn-ip" autocomplete="off"></label>
+        <label class="f" id="jn-gw-wrap">Router address<input type="text" id="jn-gw" placeholder="e.g. 192.168.1.1" autocomplete="off"></label>
         <button class="primary" id="jn-go">Join…</button>
       </div>
-      <p class="hint">Pick an address outside the router's DHCP range. Only the key derived from the password is stored on the Express, never the password itself.</p>
+      <p class="hint"><span id="jn-mode-hint"></span> Only the key derived from the password is stored on the Express, never the password itself.</p>
       <div class="row" style="margin-top:10px">
         <button id="jn-start" hidden>Join again now</button>
         <button id="jn-remove" class="danger" hidden>Remove from the Express…</button>
@@ -518,13 +519,19 @@ function renderJoin() {
   if (!J) { box.append('Status not checked yet.'); return; }
   const cls = j.state in JOIN_BADGE ? JOIN_BADGE[j.state] : 'warn';
   box.append(h('div', {}, cls ? h('span', { class: 'badge ' + cls }, j.state) : h('b', {}, j.state),
-    j.ip ? ' ' + (j.ssid ? '“' + j.ssid + '”' : 'network') + ' as ' + j.ip + ' via ' + j.gateway : '',
+    j.ip ? ' ' + (j.ssid ? '“' + j.ssid + '”' : 'network') + ' as ' + j.ip + (j.lease_s ? ' (DHCP)' : '') + ' via ' + j.gateway
+      : j.dhcp && j.ssid ? ' “' + j.ssid + '”, address from DHCP' : '',
     j.state === 'not installed' ? '' : (j.boot_hook
       ? (j.disabled ? ' · rejoin at boot is switched OFF by the failsafe' : ' · rejoins at every boot')
       : ' · stock firmware: rejoin by hand after each reboot')));
   if (j.log && j.log.length) box.append(highlight(j.log.join('\n')));
-  if (j.ip && document.activeElement !== $('jn-ip') && !$('jn-ip').value) $('jn-ip').value = j.ip;
-  if (j.gateway && document.activeElement !== $('jn-gw') && !$('jn-gw').value) $('jn-gw').value = j.gateway;
+  // prefill what is stored (a leased address is not a setting), unless the user is editing
+  if (j.state !== 'not installed' && !jnEdited) {
+    $('jn-mode').value = j.dhcp ? 'dhcp' : 'fixed';
+    $('jn-ip').value = (j.dhcp ? j.fallback_ip : j.ip) || '';
+    $('jn-gw').value = (j.dhcp ? j.fallback_ip && j.fixed_gateway : j.gateway) || '';
+    jnModeView();
+  }
   if (j.ssid && !$('jn-ssid').value) $('jn-ssid').value = j.ssid;
   const installed = j.state !== 'not installed';
   $('jn-start').hidden = !installed || ['joined', 'joining'].includes(j.state);
@@ -543,10 +550,24 @@ async function checkJoin(pollJoining) {
   await refresh();         // the LED follows the join
 }
 
+let jnEdited = false;    // the address fields were touched: don't overwrite them from status
+function jnModeView() {
+  const dhcp = $('jn-mode').value === 'dhcp';
+  $('jn-ip-label').textContent = dhcp ? 'Fallback address (optional)' : 'Express address';
+  $('jn-ip').placeholder = dhcp ? 'used if no DHCP server answers' : 'e.g. 192.168.1.250';
+  $('jn-gw-wrap').hidden = dhcp && !$('jn-ip').value.trim();
+  $('jn-mode-hint').textContent = dhcp
+    ? 'The router gives the Express its address (DHCP), and the Express renews it. A fallback address, with the router address, is used only if no DHCP server answers.'
+    : 'Pick an address outside the router\'s DHCP range, and give the router\'s address too.';
+}
+for (const id of ['jn-mode', 'jn-ip', 'jn-gw']) $(id).addEventListener('input', () => { jnEdited = true; jnModeView(); });
+jnModeView();
+
 $('jn-check').onclick = () => checkJoin(false);
 $('jn-go').onclick = async () => {
   await review('join.install',
-    { ssid: $('jn-ssid').value, wifi_password: $('jn-pw').value, ip: $('jn-ip').value, gateway: $('jn-gw').value },
+    { ssid: $('jn-ssid').value, wifi_password: $('jn-pw').value, mode: $('jn-mode').value,
+      ip: $('jn-ip').value.trim(), gateway: $('jn-gw').value.trim() },
     'Join ' + ($('jn-ssid').value || 'a network'),
     'Nothing has been written yet. Copies the supplicant and this network to the Express, then joins (about 45 s).');
   checkJoin(true);

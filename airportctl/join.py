@@ -6,8 +6,9 @@ crashes at startup (docs/join-mode.md). This puts a replacement on the Express's
 
     /mnt/Flash/autorun.sh              payload/autorun.sh: the join, the LED, the failsafe
     /mnt/Flash/autorun/wpa_supplicant  payload/wpa_supplicant (prebuilt, see payload/NOTICE.txt)
+    /mnt/Flash/autorun/dhcpc           payload/dhcpc (prebuilt from crossdev/src/dhcpc.c)
     /mnt/Flash/autorun/wpa.conf        the network, with the PMK only (never the passphrase)
-    /mnt/Flash/autorun/join.conf       IP= GW= MASK= for the Express on that network
+    /mnt/Flash/autorun/join.conf       IP=dhcp [FALLBACK_IP= GW= MASK=], or a fixed IP= GW= MASK=
     /mnt/Flash/autorun/ssid            the network name, for `status`
 
 The 2.4 GHz radio becomes the client; the 5 GHz network stays up. On stock firmware the join
@@ -82,6 +83,26 @@ def _sh(host, password, command, **kw):
     return ssh(host, password, command, **kw).decode(errors='replace')
 
 
+def join_conf(ip='dhcp', gateway=None, netmask='255.255.255.0', fallback_ip=None):
+    """join.conf for autorun.sh: DHCP (optionally with a fixed fallback address) or a fixed
+    address. GW/MASK describe the fixed address, whichever of the two it is."""
+    if ip == 'dhcp':
+        if not fallback_ip:
+            if gateway:
+                raise ValueError('--gateway is only for a fixed address (--ip or --fallback-ip)')
+            return 'IP=dhcp\n'
+        if not gateway:
+            raise ValueError('--fallback-ip needs --gateway')
+        _check_net(fallback_ip, gateway, netmask)
+        return f'IP=dhcp\nFALLBACK_IP={fallback_ip}\nGW={gateway}\nMASK={netmask}\n'
+    if fallback_ip:
+        raise ValueError('--fallback-ip only goes with DHCP')
+    if not gateway:
+        raise ValueError('a fixed --ip needs --gateway')
+    _check_net(ip, gateway, netmask)
+    return f'IP={ip}\nGW={gateway}\nMASK={netmask}\n'
+
+
 def _check_net(ip, gateway, netmask):
     try:
         net = ipaddress.IPv4Network(f'{ip}/{netmask}', strict=False)
@@ -116,40 +137,46 @@ def running(host, password):
     return out.split()
 
 
-def install(host, password, ssid, wifi_password, ip, gateway, netmask='255.255.255.0',
-            start_now=True, dry_run=False, log=print):
-    _check_net(ip, gateway, netmask)
+def install(host, password, ssid, wifi_password, ip='dhcp', gateway=None,
+            netmask='255.255.255.0', fallback_ip=None, start_now=True, dry_run=False, log=print):
+    jconf = join_conf(ip, gateway, netmask, fallback_ip)
     conf = wpa_conf(ssid, wifi_password)
-    binary = _payload('wpa_supplicant')
-    log(f'join {ssid!r} as {ip} (netmask {netmask}, gateway {gateway}) on the 2.4 GHz radio; '
-        f'the 5 GHz network stays up')
-    log(f'to {D}/: wpa_supplicant ({len(binary)} B), wpa.conf (PMK only), join.conf, ssid; '
-        f'and {F}/autorun.sh')
+    binaries = {name: _payload(name) for name in ('wpa_supplicant', 'dhcpc')}
+    if ip == 'dhcp':
+        how = 'with an address from DHCP' + (f' (else {fallback_ip}, netmask {netmask}, gateway '
+                                             f'{gateway})' if fallback_ip else '')
+    else:
+        how = f'as {ip} (netmask {netmask}, gateway {gateway})'
+    log(f'join {ssid!r} {how} on the 2.4 GHz radio; the 5 GHz network stays up')
+    log(f'to {D}/: ' + ', '.join(f'{n} ({len(b)} B)' for n, b in binaries.items()) +
+        f', wpa.conf (PMK only), join.conf, ssid; and {F}/autorun.sh')
     if dry_run:
         log('dry run, nothing written')
         return
     if not _sh(host, password, 'echo ok').startswith('ok'):
         raise RuntimeError('unexpected reply from the Express shell')
-    have = _sh(host, password, f'[ -f {D}/wpa_supplicant ] && openssl dgst -sha256 '
-                               f'{D}/wpa_supplicant || true').strip()
-    need_bin = not have.endswith(hashlib.sha256(binary).hexdigest())
+    upload = []
+    for name, binary in binaries.items():
+        have = _sh(host, password, f'[ -f {D}/{name} ] && openssl dgst -sha256 '
+                                   f'{D}/{name} || true').strip()
+        if have.endswith(hashlib.sha256(binary).hexdigest()):
+            log(f'  {name} already there (same SHA-256)')
+        else:
+            upload.append(name)
     avail = int(_sh(host, password, f'df -k {F}').split('\n')[1].split()[3])
-    need = (len(binary) // 1024 + 16 if need_bin else 16) + SPARE_KB
+    need = sum(len(binaries[n]) // 1024 for n in upload) + 16 + SPARE_KB
     if avail < need:
         raise RuntimeError(f'only {avail} KB free on {F}, need {need} KB (incl. {SPARE_KB} spare)')
     _sh(host, password, f'mkdir -p {D} && chmod 700 {D}')
-    if need_bin:
-        if running(host, password):
-            raise RuntimeError('the supplicant is running from Flash; reboot before replacing it')
+    if 'wpa_supplicant' in upload and running(host, password):
+        raise RuntimeError('the supplicant is running from Flash; reboot before replacing it')
+    for name in upload:
         # temp name then rename, so a running copy is never overwritten in place
-        ssh(host, password, f'cat > {D}/wpa_supplicant.new && chmod 755 {D}/wpa_supplicant.new '
-                            f'&& mv {D}/wpa_supplicant.new {D}/wpa_supplicant', data=binary)
-        log('  wpa_supplicant uploaded')
-    else:
-        log('  wpa_supplicant already there (same SHA-256)')
+        ssh(host, password, f'cat > {D}/{name}.new && chmod 755 {D}/{name}.new '
+                            f'&& mv {D}/{name}.new {D}/{name}', data=binaries[name])
+        log(f'  {name} uploaded')
     ssh(host, password, f'umask 077; cat > {D}/wpa.conf', data=conf.encode())
-    ssh(host, password, f'cat > {D}/join.conf',
-        data=f'IP={ip}\nGW={gateway}\nMASK={netmask}\n'.encode())
+    ssh(host, password, f'cat > {D}/join.conf', data=jconf.encode())
     ssh(host, password, f'cat > {D}/ssid', data=ssid.encode('utf-8'))
     ssh(host, password, f'cat > {F}/autorun.sh.new && mv {F}/autorun.sh.new {F}/autorun.sh',
         data=_payload('autorun.sh'))
@@ -176,13 +203,14 @@ def start(host, password, log=print):
 
 def status(host, password):
     """What is installed and what the last run did. Never reads wpa.conf (it holds the PMK)."""
-    marks = ('autorun.sh', 'autorun/wpa_supplicant', 'autorun/wpa.conf', 'autorun.try',
-             'autorun.off')
+    marks = ('autorun.sh', 'autorun/wpa_supplicant', 'autorun/dhcpc', 'autorun/wpa.conf',
+             'autorun.try', 'autorun.off')
     out = _sh(host, password,
               f'cd {F}; for f in {" ".join(marks)}; do [ -e $f ] && echo "has $f"; done; '
               f'echo "--conf"; cat autorun/join.conf 2>/dev/null; '
               f'echo "--ssid"; cat autorun/ssid 2>/dev/null; echo; '
               f'echo "--hook"; case "$(cat /etc/rc)" in *autorun*) echo yes;; esac; '
+              f'echo "--lease"; cat /mnt/Memory/lease 2>/dev/null; '
               f'echo "--log"; cat /mnt/Memory/autorun.log 2>/dev/null; true')
     sec, lines = None, {}
     for line in out.split('\n'):
@@ -192,8 +220,20 @@ def status(host, password):
         lines.setdefault(sec, []).append(line)
     has = {l[4:] for l in lines.get(None, []) if l.startswith('has ')}
     conf = dict(l.split('=', 1) for l in lines.get('conf', []) if '=' in l)
+    lease = {k: v.strip('"') for k, v in (l.split('=', 1) for l in lines.get('lease', [])
+                                          if '=' in l)}
+    dhcp = conf.get('IP') == 'dhcp'
     log = [l for l in lines.get('log', []) if l.strip()]
     last = log[-1] if log else ''
+    if not dhcp:
+        ip, gw, mask = conf.get('IP'), conf.get('GW'), conf.get('MASK')
+    elif lease:                 # this boot's lease (/mnt/Memory/lease)
+        ip, gw, mask = (lease.get('DHCP_IP'), lease.get('DHCP_ROUTER') or lease.get('DHCP_SERVER'),
+                        lease.get('DHCP_MASK'))
+    elif any('using the fallback address' in l for l in log):
+        ip, gw, mask = conf.get('FALLBACK_IP'), conf.get('GW'), conf.get('MASK')
+    else:
+        ip = gw = mask = None
     pids = running(host, password)
     state = ('not installed' if 'autorun.sh' not in has else
              'joined' if pids and last.startswith('joined') else
@@ -203,7 +243,10 @@ def status(host, password):
              'installed, not running')
     return {'state': state, 'installed': sorted(has - {'autorun.try', 'autorun.off'}),
             'ssid': ''.join(lines.get('ssid', [])).strip() or None,
-            'ip': conf.get('IP'), 'gateway': conf.get('GW'), 'netmask': conf.get('MASK'),
+            'dhcp': dhcp, 'ip': ip, 'gateway': gw, 'netmask': mask,
+            # what is stored, for the UI form (ip/gateway above are what is in use)
+            'fallback_ip': conf.get('FALLBACK_IP'), 'fixed_gateway': conf.get('GW'),
+            'lease_s': lease.get('DHCP_LEASE') if dhcp else None,
             'at_boot': bool(lines.get('hook')) and 'autorun.off' not in has,
             'boot_hook': bool(lines.get('hook')), 'disabled': 'autorun.off' in has,
             'pids': pids, 'log': [l for l in log if not l.startswith('\t')]}
@@ -211,10 +254,13 @@ def status(host, password):
 
 def describe(st):
     lines = [f'state: {st["state"]}']
+    name = repr(st['ssid']) if st['ssid'] else '(name not recorded)'
     if st['ip']:
-        name = repr(st['ssid']) if st['ssid'] else '(name not recorded)'
         lines.append(f'network: {name}  address {st["ip"]}/'
-                     f'{st["netmask"] or "255.255.255.0"}  gateway {st["gateway"]}')
+                     f'{st["netmask"] or "255.255.255.0"}  gateway {st["gateway"]}' +
+                     (f'  (DHCP, lease {st["lease_s"]} s)' if st.get('lease_s') else ''))
+    elif st.get('dhcp'):
+        lines.append(f'network: {name}  address: DHCP (no lease yet this boot)')
     if st['boot_hook']:
         lines.append('at boot: ' + ('DISABLED by the failsafe (autorun.off); '
                                     f'`rm {F}/autorun.off` to re-enable' if st['disabled']

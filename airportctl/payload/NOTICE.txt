@@ -45,5 +45,11 @@ wpa_supplicant
     California, Berkeley and its contributors, and by the NetBSD Foundation, Inc. and
     its contributors.
 
+dhcpc
+    Built from crossdev/src/dhcpc.c by crossdev/build-dhcpc.sh.
+    SHA-256 f1aa16b2c67295d52c38ab8b6196233cd5fc38585ea17847a70bb35e077aa71c, 120,588 bytes.
+    Part of airport-express-tools, MIT License (see LICENSE at the repository root). Statically
+    linked against the NetBSD 4.0 C library (BSD-style licenses, as above).
+
 autorun.sh
     Part of airport-express-tools, MIT License (see LICENSE at the repository root).

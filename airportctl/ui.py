@@ -45,6 +45,14 @@ NEEDS_REBOOT = {'wifi.ssid', 'wifi.secure', 'wifi.hidden', 'wifi.join', 'wifi.re
 NO_DRY_RUN = {'led', 'wifi.backup', 'reboot', 'join.start', 'join.remove'}
 
 
+def _join_address(p):
+    """Address flags for `join install`: DHCP (optionally with a fixed fallback) or fixed."""
+    ip, gw = (p.get('ip') or '').strip(), (p.get('gateway') or '').strip()
+    if p.get('mode') == 'fixed':
+        return [f'--ip={ip}', f'--gateway={gw}']
+    return [f'--fallback-ip={ip}', f'--gateway={gw}'] if ip else []
+
+
 def _radio(p):
     r = p.get('radio')
     return [] if r in (None, '', 'all') else ['--radio', str(int(r))]
@@ -84,8 +92,7 @@ ACTIONS = {
          f"--wifi-password={p.get('wifi_password', '')}"] + (['--psta'] if p.get('psta') else []),
         [p['ssid']]),
     'join.install': lambda p: (
-        ['join', 'install', f"--wifi-password={p.get('wifi_password', '')}",
-         f"--ip={p.get('ip', '')}", f"--gateway={p.get('gateway', '')}"],
+        ['join', 'install', f"--wifi-password={p.get('wifi_password', '')}"] + _join_address(p),
         [p['ssid']]),
     'join.start': lambda p: (['join', 'start'], []),
     'join.remove': lambda p: (['join', 'remove'], []),
