@@ -11,6 +11,10 @@ crashes at startup (docs/join-mode.md). This puts a replacement on the Express's
     /mnt/Flash/autorun/join.conf       IP=dhcp [FALLBACK_IP= GW= MASK=], or a fixed IP= GW= MASK=
     /mnt/Flash/autorun/ssid            the network name, for `status`
 
+The Express is named on the joined network after the base station name (syNm): ACPd derives
+the hostname from it, which mDNS announces as <hostname>.local and dhcpc sends to the router.
+`install --name` renames the base station; ACPd applies a new name at the next boot.
+
 The 2.4 GHz radio becomes the client; the 5 GHz network stays up. On stock firmware the join
 lasts until the next reboot (`join start` redoes it); with the autorun firmware it is redone
 at every boot.
@@ -26,6 +30,7 @@ import shlex
 import subprocess
 import tempfile
 
+from . import acp
 from . import wifi as wifimod
 
 F = '/mnt/Flash'
@@ -138,8 +143,18 @@ def running(host, password):
 
 
 def install(host, password, ssid, wifi_password, ip='dhcp', gateway=None,
-            netmask='255.255.255.0', fallback_ip=None, start_now=True, dry_run=False, log=print):
+            netmask='255.255.255.0', fallback_ip=None, name=None, start_now=True, dry_run=False,
+            log=print):
+    """Put the join on /mnt/Flash and start it. `name`, if given and different, renames the
+    base station (syNm), which is also the Express's name on the joined network."""
     jconf = join_conf(ip, gateway, netmask, fallback_ip)
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise ValueError('--name is empty')
+        old = acp.get_name(host, password)
+        if name == old:
+            name = None
     conf = wpa_conf(ssid, wifi_password)
     binaries = {name: _payload(name) for name in ('wpa_supplicant', 'dhcpc')}
     if ip == 'dhcp':
@@ -150,6 +165,9 @@ def install(host, password, ssid, wifi_password, ip='dhcp', gateway=None,
     log(f'join {ssid!r} {how} on the 2.4 GHz radio; the 5 GHz network stays up')
     log(f'to {D}/: ' + ', '.join(f'{n} ({len(b)} B)' for n, b in binaries.items()) +
         f', wpa.conf (PMK only), join.conf, ssid; and {F}/autorun.sh')
+    if name:
+        log(f'rename the base station {old!r} -> {name!r}; the Express goes by that name on '
+            'the network after the next reboot')
     if dry_run:
         log('dry run, nothing written')
         return
@@ -181,6 +199,8 @@ def install(host, password, ssid, wifi_password, ip='dhcp', gateway=None,
     ssh(host, password, f'cat > {F}/autorun.sh.new && mv {F}/autorun.sh.new {F}/autorun.sh',
         data=_payload('autorun.sh'))
     log('  config and autorun.sh written')
+    if name:
+        log(f'  base station renamed to {acp.set_name(host, password, name)!r}')
     if start_now:
         try:
             start(host, password, log=log)
@@ -211,6 +231,7 @@ def status(host, password):
               f'echo "--ssid"; cat autorun/ssid 2>/dev/null; echo; '
               f'echo "--hook"; case "$(cat /etc/rc)" in *autorun*) echo yes;; esac; '
               f'echo "--lease"; cat /mnt/Memory/lease 2>/dev/null; '
+              f'echo "--host"; hostname; '
               f'echo "--log"; cat /mnt/Memory/autorun.log 2>/dev/null; true')
     sec, lines = None, {}
     for line in out.split('\n'):
@@ -247,6 +268,7 @@ def status(host, password):
             # what is stored, for the UI form (ip/gateway above are what is in use)
             'fallback_ip': conf.get('FALLBACK_IP'), 'fixed_gateway': conf.get('GW'),
             'lease_s': lease.get('DHCP_LEASE') if dhcp else None,
+            'hostname': ''.join(lines.get('host', [])).strip() or None,
             'at_boot': bool(lines.get('hook')) and 'autorun.off' not in has,
             'boot_hook': bool(lines.get('hook')), 'disabled': 'autorun.off' in has,
             'pids': pids, 'log': [l for l in log if not l.startswith('\t')]}
@@ -261,6 +283,8 @@ def describe(st):
                      (f'  (DHCP, lease {st["lease_s"]} s)' if st.get('lease_s') else ''))
     elif st.get('dhcp'):
         lines.append(f'network: {name}  address: DHCP (no lease yet this boot)')
+    if st.get('hostname') and st['state'] != 'not installed':
+        lines.append(f'name: {st["hostname"]}.local (from the base station name)')
     if st['boot_hook']:
         lines.append('at boot: ' + ('DISABLED by the failsafe (autorun.off); '
                                     f'`rm {F}/autorun.off` to re-enable' if st['disabled']

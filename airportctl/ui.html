@@ -100,7 +100,7 @@ dialog h2 { margin-bottom: 6px; }
   </header>
 
   <div id="reboot-banner" class="banner warn" hidden>
-    <span><b>Changes stored.</b> Wi-Fi and mode changes take effect after a reboot.</span>
+    <span><b>Changes stored.</b> Wi-Fi, mode and name changes take effect after a reboot.</span>
     <button id="reboot2">Reboot now</button>
   </div>
   <div id="error-banner" class="banner bad" hidden></div>
@@ -187,6 +187,7 @@ dialog h2 { margin-bottom: 6px; }
       <div class="row" style="margin-top:10px; align-items:flex-end">
         <label class="f">Network to join<input type="text" id="jn-ssid" maxlength="32" autocomplete="off"></label>
         <label class="f">Its password<input type="password" id="jn-pw" autocomplete="new-password"></label>
+        <label class="f">Name on the network<input type="text" id="jn-name" autocomplete="off"></label>
       </div>
       <div class="row" style="margin-top:10px; align-items:flex-end">
         <label class="f" style="flex:0 1 170px">Address<select id="jn-mode"><option value="dhcp">Automatic (DHCP)</option><option value="fixed">Fixed</option></select></label>
@@ -194,7 +195,7 @@ dialog h2 { margin-bottom: 6px; }
         <label class="f" id="jn-gw-wrap">Router address<input type="text" id="jn-gw" placeholder="e.g. 192.168.1.1" autocomplete="off"></label>
         <button class="primary" id="jn-go">Join…</button>
       </div>
-      <p class="hint"><span id="jn-mode-hint"></span> Only the key derived from the password is stored on the Express, never the password itself.</p>
+      <p class="hint"><span id="jn-mode-hint"></span> <span id="jn-name-hint"></span> Only the key derived from the password is stored on the Express, never the password itself.</p>
       <div class="row" style="margin-top:10px">
         <button id="jn-start" hidden>Join again now</button>
         <button id="jn-remove" class="danger" hidden>Remove from the Express…</button>
@@ -305,6 +306,7 @@ function render() {
 
   if (document.activeElement !== $('conn-host')) $('conn-host').value = s.host || '';
   if (d && document.activeElement !== $('bs-name') && !$('bs-name').dataset.edited) $('bs-name').value = d.name || '';
+  if (d && document.activeElement !== $('jn-name') && !$('jn-name').dataset.edited) { $('jn-name').value = d.name || ''; jnNameView(); }
 
   // LED
   const led = s.led || {};
@@ -456,7 +458,7 @@ async function review(action, params, title, sub) {
         { command: 'airportctl wifi restore ' + res.backup_file }, 'Undo (restore backup)');
       if (undo) log(await api('run', { action: 'wifi.restore', params: { file: res.backup_file }, dry_run: false }));
     }
-    for (const id of ['ssid-name', 'bs-name']) delete $(id).dataset.edited;
+    for (const id of ['ssid-name', 'bs-name', 'jn-name']) delete $(id).dataset.edited;
     for (const id of ['ssid-pw', 'sec-secret', 'join-pw', 'jn-pw']) $(id).value = '';
   } finally {
     setBusy(false);
@@ -521,6 +523,7 @@ function renderJoin() {
   box.append(h('div', {}, cls ? h('span', { class: 'badge ' + cls }, j.state) : h('b', {}, j.state),
     j.ip ? ' ' + (j.ssid ? '“' + j.ssid + '”' : 'network') + ' as ' + j.ip + (j.lease_s ? ' (DHCP)' : '') + ' via ' + j.gateway
       : j.dhcp && j.ssid ? ' “' + j.ssid + '”, address from DHCP' : '',
+    j.state === 'joined' && j.hostname ? ' · ' + j.hostname + '.local' : '',
     j.state === 'not installed' ? '' : (j.boot_hook
       ? (j.disabled ? ' · rejoin at boot is switched OFF by the failsafe' : ' · rejoins at every boot')
       : ' · stock firmware: rejoin by hand after each reboot')));
@@ -563,11 +566,26 @@ function jnModeView() {
 for (const id of ['jn-mode', 'jn-ip', 'jn-gw']) $(id).addEventListener('input', () => { jnEdited = true; jnModeView(); });
 jnModeView();
 
+// The name is the base station name (syNm): ACPd makes the hostname from it, announced as
+// <hostname>.local and sent to the router by our DHCP client. Changing it renames the base station.
+function jnName() {
+  const name = $('jn-name').value.trim(), cur = (S && S.device && S.device.name) || '';
+  return name && name !== cur ? name : '';
+}
+function jnNameView() {
+  const host = $('jn-name').value.trim().replace(/[^A-Za-z0-9-]/g, '-');
+  $('jn-name-hint').textContent = !host ? ''
+    : jnName() ? 'After the next reboot the Express will be ' + host + '.local on the network: this renames the base station.'
+    : 'The Express is ' + host + '.local on the network (the base station name).';
+}
+$('jn-name').addEventListener('input', jnNameView);
+jnNameView();
+
 $('jn-check').onclick = () => checkJoin(false);
 $('jn-go').onclick = async () => {
   await review('join.install',
     { ssid: $('jn-ssid').value, wifi_password: $('jn-pw').value, mode: $('jn-mode').value,
-      ip: $('jn-ip').value.trim(), gateway: $('jn-gw').value.trim() },
+      ip: $('jn-ip').value.trim(), gateway: $('jn-gw').value.trim(), name: jnName() },
     'Join ' + ($('jn-ssid').value || 'a network'),
     'Nothing has been written yet. Copies the supplicant and this network to the Express, then joins (about 45 s).');
   checkJoin(true);
@@ -582,7 +600,7 @@ $('jn-remove').onclick = async () => {
 document.querySelectorAll('#led button').forEach(b => b.onclick = () => direct('led', { state: b.dataset.led }));
 $('log-clear').onclick = () => $('log').replaceChildren();
 $('refresh').onclick = () => { refresh(); renderBackups(); };
-for (const id of ['ssid-name', 'bs-name']) $(id).addEventListener('input', () => { $(id).dataset.edited = '1'; });
+for (const id of ['ssid-name', 'bs-name', 'jn-name']) $(id).addEventListener('input', () => { $(id).dataset.edited = '1'; });
 $('ssid-radio').onchange = updateForms;
 $('sec-mode').onchange = updateForms;
 

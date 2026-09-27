@@ -13,10 +13,11 @@ LEASE = ('DHCP_IP=192.168.1.23\nDHCP_MASK=255.255.255.0\nDHCP_ROUTER=192.168.1.1
          'DHCP_SERVER_MAC=aa:bb:cc:dd:ee:ff\nDHCP_LEASE=86400\nDHCP_T1=43200\nDHCP_T2=75600\n')
 
 
-def device_output(conf, lease='', log=''):
+def device_output(conf, lease='', log='', host='base-station-airplay-station'):
     """What status()'s one SSH command prints on the Express."""
     return ('has autorun.sh\nhas autorun/wpa_supplicant\nhas autorun/dhcpc\nhas autorun/wpa.conf\n'
-            f'--conf\n{conf}--ssid\nHomeWiFi\n--hook\nyes\n--lease\n{lease}--log\n{log}')
+            f'--conf\n{conf}--ssid\nHomeWiFi\n--hook\nyes\n--lease\n{lease}--host\n{host}\n'
+            f'--log\n{log}')
 
 
 def status(out, pids=('233',)):
@@ -60,6 +61,8 @@ class Status(unittest.TestCase):
         self.assertIsNone(st['fallback_ip'])
         self.assertIn('address 192.168.1.23/255.255.255.0  gateway 192.168.1.1  (DHCP, lease '
                       '86400 s)', join.describe(st))
+        self.assertEqual(st['hostname'], 'base-station-airplay-station')
+        self.assertIn('name: base-station-airplay-station.local', join.describe(st))
 
     def test_dhcp_no_lease_yet(self):
         st = status(device_output('IP=dhcp\n', '', 'autorun start\n'))
@@ -102,6 +105,15 @@ class UiAddress(unittest.TestCase):
                          ['--ip=192.168.1.250', '--gateway=192.168.1.254'])
         self.assertEqual(f({}), [])     # older pages: no mode, no address = DHCP
 
+    def test_name(self):
+        from airportctl import ui
+        argv, pos = ui.ACTIONS['join.install']({'ssid': 'HomeWiFi', 'wifi_password': 'x',
+                                                'mode': 'dhcp', 'name': ' Kitchen Express '})
+        self.assertIn('--name=Kitchen Express', argv)
+        argv, _ = ui.ACTIONS['join.install']({'ssid': 'HomeWiFi', 'wifi_password': 'x',
+                                              'mode': 'dhcp', 'name': ''})
+        self.assertFalse([a for a in argv if a.startswith('--name')])
+
 
 class Install(unittest.TestCase):
     def test_dry_run_dhcp(self):
@@ -110,6 +122,28 @@ class Install(unittest.TestCase):
                      log=logged.append)
         self.assertIn('with an address from DHCP', logged[0])
         self.assertIn('dhcpc (', logged[1])
+
+    def dry_run_name(self, name):
+        logged = []
+        with mock.patch.object(join.acp, 'get_name', return_value='Base Station airPlay station'), \
+                mock.patch.object(join.acp, 'set_name') as set_name:
+            join.install('10.0.1.1', 'pw', 'HomeWiFi', 'correct horse', name=name, dry_run=True,
+                         log=logged.append)
+        set_name.assert_not_called()
+        return logged
+
+    def test_dry_run_rename(self):
+        logged = self.dry_run_name(' Kitchen ')
+        self.assertIn("rename the base station 'Base Station airPlay station' -> 'Kitchen'",
+                      logged[2])
+
+    def test_same_name_no_rename(self):
+        logged = self.dry_run_name('Base Station airPlay station')
+        self.assertFalse([l for l in logged if 'rename' in l])
+
+    def test_empty_name(self):
+        with self.assertRaises(ValueError):
+            self.dry_run_name('  ')
 
 
 if __name__ == '__main__':

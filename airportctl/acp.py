@@ -128,6 +128,23 @@ def set_props(host, password, props, timeout=15):
     return failures
 
 
+def get_name(host, password):
+    """The base station name (syNm)."""
+    return get_raw(host, password, 'syNm').rstrip(b'\0').decode('utf-8', 'replace')
+
+
+def set_name(host, password, name):
+    """Set the base station name (syNm), keeping the stored NUL terminator if there is one.
+    Returns the name read back. ACPd derives the hostname from it (<name>.local over mDNS,
+    and the name our dhcpc gives the router), at boot only: tested 2026-09-25."""
+    old = get_raw(host, password, 'syNm')
+    value = name.encode('utf-8') + (b'\0' if old.endswith(b'\0') else b'')
+    fails = set_props(host, password, [('syNm', value)])
+    if fails:
+        raise RuntimeError('device rejected syNm: ' + ', '.join(f'{n}=0x{c:08x}' for n, c in fails))
+    return get_name(host, password)
+
+
 def rpc(host, password, function, inputs=None, timeout=10):
     """Call an ACP RPC function; return the parsed reply dict ({'status':..., 'outputs':...})."""
     body = cfl.compose({'function': function, 'inputs': inputs or {}})

@@ -270,6 +270,20 @@ only needs the local subnet. If no server answers, `FALLBACK_IP` (with `GW`/`MAS
 still up. There is no ARP conflict check (no DHCPDECLINE). A DHCP reservation on the router
 keeps the AirPlay address stable across reboots.
 
+**Name on the network.** ACPd sets the hostname from the base station name (`syNm`):
+"Base Station airPlay station" becomes `base-station-airplay-station`. Its mDNSResponder
+announces that as `<name>.local` on every interface, `wlan2` included, so the Express is reachable
+by name once joined, with no work on our side. `dhcpc` sends the same hostname (DHCP option 12)
+in every DISCOVER and REQUEST, so the router's device list shows it too. `airportctl join
+install --name` (and the Name field in the UI's join card) renames the base station, and both
+names follow, **from the next reboot**. Tested on 2026-09-25 while joined: the write to `syNm`
+was stored and read back, but the hostname, the `_airport._tcp` service name and the `.local`
+name stayed the old ones (checked for about a minute), and the join was not disturbed. After a
+reboot and `join start` the Express came back as `kitchen-express` ("Kitchen Express" as the
+base station name): mDNS announced `Kitchen-Express.local` → the leased `.143`, the old name no
+longer resolved, and the join was otherwise unchanged. Renaming it back took another reboot. A
+rename therefore takes effect when ACPd starts at the next boot.
+
 **Status:** `crossdev/tests/dhcpc-test.sh` runs the client logic against
 busybox `udhcpd` in a network namespace (INIT, INIT-REBOOT, unicast renew, broadcast rebind, NAK,
 timeout). `tests/autorun-mock.sh` runs `autorun.sh` with stubbed device commands and checks the

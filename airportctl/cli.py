@@ -143,17 +143,12 @@ def cmd_wifi_restore(args):
 
 
 def cmd_name(args):
-    old = acp.get_raw(args.host, args.password, 'syNm')
-    old_txt = old.rstrip(b'\0').decode('utf-8', 'replace')
-    value = args.name.encode('utf-8') + (b'\0' if old.endswith(b'\0') else b'')
-    print(f'syNm: {old_txt!r} -> {args.name!r}')
+    print(f'syNm: {acp.get_name(args.host, args.password)!r} -> {args.name!r}')
     if args.dry_run:
         print('dry run, nothing written')
         return
-    fails = acp.set_props(args.host, args.password, [('syNm', value)])
-    if fails:
-        raise SystemExit('device rejected syNm: ' + ', '.join(f'{n}=0x{c:08x}' for n, c in fails))
-    print('read back:', repr(acp.get_raw(args.host, args.password, 'syNm').rstrip(b'\0').decode('utf-8', 'replace')))
+    print('read back:', repr(acp.set_name(args.host, args.password, args.name)))
+    print('note: the Express takes the new name (hostname, <name>.local) at the next reboot')
 
 
 def cmd_admin_password(args):
@@ -410,8 +405,8 @@ def cmd_mode_wan(args):
 def cmd_join_install(args):
     from . import join
     join.install(args.host, args.password, args.ssid, args.wifi_password, args.ip, args.gateway,
-                 netmask=args.netmask, fallback_ip=args.fallback_ip, start_now=not args.no_start,
-                 dry_run=args.dry_run)
+                 netmask=args.netmask, fallback_ip=args.fallback_ip, name=args.name,
+                 start_now=not args.no_start, dry_run=args.dry_run)
 
 
 def cmd_join_start(args):
@@ -511,6 +506,10 @@ def build_parser():
     sp.add_argument('--gateway', help="the router's address, for a fixed --ip or --fallback-ip")
     sp.add_argument('--netmask', default='255.255.255.0',
                     help='for a fixed --ip or --fallback-ip (default 255.255.255.0)')
+    sp.add_argument('--name', help='rename the base station (syNm) too. After the next reboot '
+                                   'the Express goes by this name on the network '
+                                   '(<name>.local, and in the router\'s device list), with '
+                                   'spaces as dashes')
     sp.add_argument('--no-start', action='store_true', help='install only; `join start` later')
     sp.add_argument('--dry-run', action='store_true', help='show what would be written')
     sp.set_defaults(func=cmd_join_install, writes=True)
@@ -527,7 +526,8 @@ def build_parser():
                          'omit or "show" to read it. Live, no reboot.')
     sp.set_defaults(func=cmd_led, writes=True)
 
-    sp = sub.add_parser('name', help='set the base station name (syNm)')
+    sp = sub.add_parser('name', help='set the base station name (syNm); applies at the next '
+                                     'reboot')
     sp.add_argument('name')
     sp.add_argument('--dry-run', action='store_true')
     sp.set_defaults(func=cmd_name, writes=True)

@@ -39,7 +39,7 @@ CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline
        "frame-ancestors 'none'")
 
 # Wi-Fi and mode changes are stored, then applied by the firmware at the next boot.
-NEEDS_REBOOT = {'wifi.ssid', 'wifi.secure', 'wifi.hidden', 'wifi.join', 'wifi.restore',
+NEEDS_REBOOT = {'name', 'wifi.ssid', 'wifi.secure', 'wifi.hidden', 'wifi.join', 'wifi.restore',
                 'mode.ctim', 'mode.wan'}
 # Commands without a --dry-run flag: they run immediately.
 NO_DRY_RUN = {'led', 'wifi.backup', 'reboot', 'join.start', 'join.remove'}
@@ -92,7 +92,8 @@ ACTIONS = {
          f"--wifi-password={p.get('wifi_password', '')}"] + (['--psta'] if p.get('psta') else []),
         [p['ssid']]),
     'join.install': lambda p: (
-        ['join', 'install', f"--wifi-password={p.get('wifi_password', '')}"] + _join_address(p),
+        ['join', 'install', f"--wifi-password={p.get('wifi_password', '')}"] + _join_address(p)
+        + ([f"--name={p['name'].strip()}"] if (p.get('name') or '').strip() else []),
         [p['ssid']]),
     'join.start': lambda p: (['join', 'start'], []),
     'join.remove': lambda p: (['join', 'remove'], []),
@@ -227,7 +228,8 @@ def run_action(state, action, params, dry_run):
     if result.get('ok') and not dry and m and os.path.isfile(m.group(1)):
         result['backup_file'] = os.path.basename(m.group(1))
     if result['ok'] and not dry:
-        if action in NEEDS_REBOOT:
+        if action in NEEDS_REBOOT or (action == 'join.install'
+                                      and 'base station renamed' in result['output']):
             state.pending_reboot = True
         elif action == 'reboot':
             state.pending_reboot = False
