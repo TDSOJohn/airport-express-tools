@@ -147,6 +147,55 @@ embedding the MAC), `WiFi`/`raWE` (SSID + PMK), `raSR` (neighbour SSIDs), `logm`
 (syslog), `auHK` (AirPlay host key), `syPW`/`syPR`/`syGP` (passwords). The full
 unsanitised sweep is kept outside the repo (`rpc_live/2026-09-24-props/`).
 
+### With a wired WAN uplink (2026-09-28)
+
+Same read-only sweep, WAN port cabled to a home router (NAT role, DHCP lease on the WAN):
+149 readable (81 in the wildcard dump). Differences from the table below, which was taken
+with the WAN unplugged:
+
+| fourcc | no WAN | wired WAN |
+|---|---|---|
+| `waCD` | absent | `lan` (DHCP domain name, option 15) |
+| `waIP` / `waSM` / `waRA` / `waC1` | `169.254.x` / `/16` / `0.0.0.0` / `0.0.0.0` | lease address / `/24` / router / DNS server |
+| `waIS` | `0x0` | `0x302` (WAN interface state bits) |
+| `waDI` | empty `leases` | the dhclient lease: server id, dns, domainName, fixedAddress, routers, leaseTime, renew/rebind/expire times |
+| `rteI` | `{IPv4: 0.0.0.0}` | `{IPv4: <router>}` |
+| `WLnk` / `PHYS` | `0` / port down | `4` / port 100 Mbit/s full duplex |
+| `time` | seconds since boot | real Unix time (`sntpd -client=time.apple.com` set the clock) |
+| `sySt` | `waCF`, `waNI`, `nDNS` | `waCF`, `DubN` |
+
+`waLL` keeps the `169.254.x` address even with a lease: `/sbin/link_local eth0` always holds
+an IPv4 link-local alias on the WAN port.
+
+### Status problems (`sySt`)
+
+`sySt` (and the `prob=` key of the `_airport._tcp` mDNS TXT record) lists the posted
+problems. ACPd posts and clears them by fourcc (`ACPPostProblemDirect` `FUN_006752c8` /
+`ACPClearProblemDirect` `FUN_0067504c`). The fourcc list is a table at VMA `0xc5ade0`:
+8-byte records, fourcc + two flag bytes, `anyP` last. Flags `01 00`: `waNL waNI raNN wdsP ppNS
+ppBP rdNS usbp fsck Ifsc fslo Ifsl unsD waRj waRg ctim DubN wbAu bsWD upAv nDNS timz dMCR
+iCPW oTMP 6gdn 6rdn 6rEr`. Flags `00 00`: `unkn wscJ mgrt mgEr SSdF soft wiDM TaIP raHN`.
+Flags `01 01`: `waSN waCF opNW pubP`. What the flag bytes mean is not established; the
+accessors `FUN_00807a10`/`FUN_00807a44` have no callers.
+
+The ones that decide the LED on a plain NAT setup are all local state checks, **not**
+Internet reachability probes:
+
+| code | posted when | source |
+|---|---|---|
+| `waNI` | the WAN IPv4 address is not usable (`0/8`, `127/8`, `169.254/16`) | `FUN_0065c590` + `FUN_0085e468` |
+| `DubN` | NAT on (`raNA`) **and** the WAN address is private (RFC 1918) — "double NAT" | `FUN_0065c590`, `FUN_0065f010` + `FUN_0085e360` |
+| `nDNS` | no IPv4 and no IPv6 DNS servers configured | `FUN_00664820` (writes `/etc/dns/manual-nameservers` otherwise) |
+| `waCF` | at boot, NAT on and `waNM` false: setup over the WAN is open (see [security.md](security.md#wan-side-live-wired-uplink)) | `FUN_0065746c`; same byte gates the WAN pf rules in `FUN_0065e958` |
+| `waNL` | the WAN Ethernet port has no link | observed (not decompiled) |
+| `pubP` | the admin password is still `public` | observed: gone after the password change (not decompiled) |
+
+So a unit cabled behind a home router in NAT mode blinks amber on `DubN` + `waCF` even though
+its uplink works. Bridge mode (NAT off) clears both. Tested 2026-09-28: `airportctl mode
+sharing bridge` + reboot → role 4, `sySt` `problems = []`, no `prob=` key in the mDNS TXT record,
+LED solid green on auto (`LEDc=0`). The unit then takes its address from the upstream DHCP
+server (`laIP` = `waIP`), and hosts on its LAN port and Wi-Fi share the upstream subnet.
+
 ## The full dictionary
 
 Order matches the on-device table. `disposition` is what a read returned on
@@ -290,7 +339,7 @@ undetermined.
 | 131 | `moCC` | uint32 | 0x00 | absent (-10) | legacy modem/PPP dial config |
 | 132 | `moCR` | uint32 | 0x04 priv | absent (-10) | legacy modem/PPP dial config |
 | 133 | `moCI` | uint32 | 0x00 | absent (-10) | legacy modem/PPP dial config |
-| 134 | ` moM` | uint32 | 0x00 | absent (-10) |  |
+| 134 | `\x00moM` | uint32 | 0x00 | absent (-10) |  |
 | 135 | `moVs` | string | 0x04 priv | absent (-10) | legacy modem/PPP dial config |
 | 136 | `moMP` | uint32 | 0x00 | absent (-10) | legacy modem/PPP dial config |
 | 137 | `moMF` | uint32 | 0x00 | absent (-10) | legacy modem/PPP dial config |

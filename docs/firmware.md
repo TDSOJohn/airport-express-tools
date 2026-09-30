@@ -155,7 +155,9 @@ firmware/control-plane/SSH/RF/physical trust boundaries, and a threat model — 
 
 The per-model AES keys and the container/IV/obfuscation scheme are from
 **[airpyrt-tools](https://github.com/x56/airpyrt-tools)** by x56 (`acp/basebinary.py`) and
-the write-ups at **[Embedded Ideation](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/)**.
+the same author's write-up at **[Embedded Ideation](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/)**
+(AES-128-CBC with a per-model key hidden in crunchprog, 0x8000-byte chunks, two nested
+containers with only the inner one encrypted).
 The tools here are an independent reimplementation, and the container format, the
 verbatim-write behaviour, the crunchgen layout, and the version diff were derived
 first-hand from `ACPd` and the two A1392 images.

@@ -2,9 +2,12 @@
 
 Everyone who has hacked an AirPort Express knows two facts: setting `dbug` gets you a
 root shell (see [dbug.md](dbug.md)), and the firmware is a "`.basebinary`" you can
-sometimes unpack. Almost nobody documents what sits *under* that: how the box actually
-boots, how flash is partitioned, and — the question that decides whether you can run
-custom code permanently — **whether anything cryptographically verifies the firmware.**
+sometimes unpack. Very little is written about what sits *under* that. Embedded
+Ideation's 2014 teardown identified the flash chip and named its five partitions (see
+[hardware.md](hardware.md)). What was still undocumented: the partitions' sizes and
+contents, how the box actually boots from them, and (the question that decides whether
+you can run custom code permanently) **whether anything cryptographically verifies the
+firmware.**
 
 This page answers that. It was built two ways and they agree: static analysis of
 `ACPd` (reached through the `syBL` property, which turned out to be *ACPd reading the
@@ -24,25 +27,27 @@ The kernel reports `hw.machine = ar7240`, but the silicon is actually an **Ather
 AR9344 "Wasp"** — a **MIPS 74Kc** big-endian core with the 2.4 GHz radio on-die (the
 AR934x family reuses NetBSD's `ar7240` platform/ethernet code, and CFE's
 `WASP_BOOTSTRAP_REG` gives it away) — paired with an **AR9582** for the 5 GHz radio, and
-64 MB of DDR2 RAM. Flash is a single **Winbond W25Q128 (128 Mbit = 16 MB) SPI-NOR** chip
-that the NetBSD driver exposes as five "disks" plus the RAM-disk root. (Chip identities
-are from the teardowns cited in [hardware.md](hardware.md); the sizes and partitioning
-below are read live.)
+64 MB of DDR2 RAM. Flash is a single **Winbond W25Q128BV (128 Mbit = 16 MB) SPI-NOR**
+chip, hidden under an EMI-shield anchor, that the NetBSD driver exposes as five "disks"
+plus the RAM-disk root. (The chip identities and the CFE partition names are from the
+teardowns cited in [hardware.md](hardware.md), chiefly Embedded Ideation; the sizes and
+contents below are read live.)
 
 ```
 hw.machine = ar7240      hw.machine_arch = mipseb      hw.physmem = 67108864 (64 MB)
 hw.disknames = flash0 flash1 flash2 flash3 flash4 md0
 ```
 
-| device | size | erase | role |
-|---|---:|---:|---|
-| `flash0` | 7 MB | 64 KB | firmware **bank A** (primary) |
-| `flash1` | 7 MB | 64 KB | firmware **bank B** (secondary/failover) |
-| `flash2` | 1.25 MB | 64 KB | **`/mnt/Flash`** — the only writable, persistent filesystem |
-| `flash3` | 256 KB | 64 KB | **CFE nvram / factory data** |
-| `flash4` | 512 KB | 64 KB | **Apple CFE bootloader** |
+| device | CFE name | size | erase | role |
+|---|---|---:|---:|---|
+| `flash0` | `primary` | 7 MB | 64 KB | firmware **bank A** |
+| `flash1` | `secondary` | 7 MB | 64 KB | firmware **bank B** (failover) |
+| `flash2` | `dcfg` | 1.25 MB | 64 KB | **`/mnt/Flash`**, the only writable, persistent filesystem |
+| `flash3` | `scfg` | 256 KB | 64 KB | **CFE nvram / factory data** |
+| `flash4` | `boot` | 512 KB | 64 KB | **Apple CFE bootloader** |
 
-Sizes are from `flashctl /dev/flashNc info` (authoritative). They sum to exactly
+The CFE names are Embedded Ideation's, matched to the NetBSD devices by content. Sizes
+are from `flashctl /dev/flashNc info` (authoritative). They sum to exactly
 16 MB. Each disk also has raw character nodes `/dev/rflashN.raw`; the NetBSD flash
 driver hands every disk a placeholder full-device disklabel (partitions `a`–`p` all at
 offset 0, so `disklabel` prints harmless "partitions overlap" warnings).
@@ -58,8 +63,13 @@ Two consequences worth internalising:
   there survive power cuts, even mid-write (tested; see
   [crossdev § Storage](../crossdev/README.md#storage-usb-and-persistence)). `/mnt/Memory`
   is an `mfs` scratch tmpfs.
-* **There are two full copies of the firmware.** `flash0` and `flash1` are identical
-  7 MB banks — this is what makes an interrupted update survivable (below).
+* **There are two full copies of the firmware, but not necessarily the same version.**
+  `flash0` and `flash1` are two 7 MB banks, which is what makes an interrupted update
+  survivable (below). On our unit (full dump, 2026-09-28) bank A holds **7.8.1** and bank
+  B still holds **7.6.2** (`AirPortFW-76200.16`, the 2012 build). Updates only rewrite bank
+  A, and ACPd's A→B copy is compiled out on this model (see
+  [autorun.md](autorun.md#how-updates-land-on-the-banks-from-acpd)). So the failover image
+  is whatever the unit shipped with.
 
 ## How it boots
 
@@ -87,12 +97,70 @@ primary image is OK.            primary image FAILED check/sum
 secondary image is OK.          secondary image FAILED check/sum
 ```
 
+The checksum lives in a trailer **0x20 bytes before the end of the bank** (offset
+`0x6FFFE0`): a big-endian Adler-32 over `image[0:len]`, then the big-endian `len`, then
+`0xFF` to the end. Both banks on our unit verify:
+
+| bank | firmware | `len` | Adler-32 |
+|---|---|---:|---|
+| A (`flash0`) | 7.8.1 | `0x5d0d34` | `ab7a9b4c` |
+| B (`flash1`) | 7.6.2 | `0x55ddbc` | `7c793aa9` |
+
+Bytes between `len` and the trailer aren't checked. Bank A has 60 KB of stale data there,
+left over from an earlier, larger write. The image itself is the gzboot loader followed by
+the gzip'd kernel and RAM disk (see [autorun.md](autorun.md)). `airboot` jumps into the
+loader in place with `go -noclose <address>`, so the loader runs straight from the
+memory-mapped flash, as Embedded Ideation described.
+
 Before autoboot, CFE prints *"Press any key to stop, OR autoboot will start in …"* and,
 if interrupted, drops to a **`CFE>` console** over the serial UART. From there it can
 program flash, run memory tests, and **netboot over TFTP** (`BOOT_SERVER` / `BOOT_FILE`,
 the `-tftp` / `-z` load options). That console is the real recovery and unbrick path —
-but it is only exposed on the board's UART pads, so reaching it needs the case opened
-(the one part of this still to be done).
+but it is only exposed on the board's UART pads, so reaching it needs the case opened.
+
+### The CFE console's commands
+
+These come from the help strings in our `flash4` dump. They are the stock Broadcom CFE set
+plus Apple's `airboot`/`checkimages`/`memchk`/`debugpll`. None has been run yet (the
+serial console isn't wired up at the time of writing).
+
+**Read-only, safe to explore:**
+
+| command | use |
+|---|---|
+| `help [command]` | full usage for any command |
+| `show devices` | the CFE device list. `flash0.primary` and `flash0.scfg` appear in the binary; the others (`boot`, `dcfg`, `secondary`, the whole chip) presumably follow the same `flash0.<name>` pattern |
+| `show flash [-sectors]` | `FLASH: Base … size … type …`: where the chip is memory-mapped, and its sectors |
+| `printenv` | the environment (`BOOTCMD`, `BOOTDELAY`, `ETH0_HWADDR`, …) |
+| `checkimages` | the Adler-32 check of **both** banks, with nothing booted or written |
+| `d [-b\|-h\|-w\|-q] [-p\|-v] addr len` | hex dump of memory (Embedded Ideation used `d 0x18040000 0x6F` for the GPIO registers) |
+| `u addr len` | disassemble |
+| `show memory`, `show heap`, `show time` | CFE's memory map, heap, clock |
+
+**Moving data over the network (RAM only, no flash writes):**
+
+| command | use |
+|---|---|
+| `ifconfig eth0 -addr=… -mask=…` | bring up the Ethernet port for TFTP |
+| `save host:file startaddr length` | **TFTP-upload a region of memory**. With the flash memory-mapped (address from `show flash`), this dumps the chip without NetBSD running |
+| `load [-raw] [-tftp] [-addr=…] [-max=…] host:file` | fetch a file into RAM without running it |
+| `boot [-raw\|-elf] [-z] [-tftp] host:file` | fetch and run. A way to test an image from RAM, though the gzboot loader normally runs from its flash address and may not run from RAM unchanged |
+
+**Writes flash:**
+
+| command | use |
+|---|---|
+| `flash [-noheader] [-noerase] [-offset=…] [-size=…] source flashdevice` | program a flash partition. The source can be a TFTP file, a FAT file, or **another flash partition**, so `flash -noheader flash0.secondary flash0.primary` (names to be confirmed with `show devices`) would copy bank B over bank A using the serial console alone. `-noheader` skips CFE's own image-header check |
+
+Also notable: `setenv -p` (persistent environment changes) is refused with *"persistant
+modification currently not allowed"*. `memchk` is a destructive RAM test, but it only
+touches RAM.
+
+Over serial alone, `d` prints about 4.75 characters per flash byte. At 115200 baud the
+two small partitions (768 KB) take about 5 minutes and the whole 16 MB about 2 hours, so
+`save` over Ethernet is the practical dump path from CFE. From a running system, SSH is
+simpler still: `cat /dev/rflashN.raw` over `dbug` SSH dumped all five partitions in about
+25 s (2026-09-28), with each SHA-256 matching the one computed on the device.
 
 So the chain is:
 
@@ -234,8 +302,9 @@ identities, and the flash-chip part are in **[hardware.md](hardware.md)**.
 
 Combined with the no-secure-boot finding, the documented way to run custom code is to
 modify the RAM-disk contents and write a new gzip'd bank image to `flash0`/`flash1`, which
-CFE will boot; with serial/JTAG (or an SPI programmer on the flash) and a backup of the
-five partitions, the device is effectively unbrickable.
+CFE will boot. With serial/JTAG (or an SPI programmer on the flash) and a backup of the
+five partitions, the device is effectively unbrickable. We took that backup on
+2026-09-28; like the earlier dumps, it stays out of the repo.
 
 ## What's still open
 
@@ -246,7 +315,8 @@ five partitions, the device is effectively unbrickable.
   in [firmware.md](firmware.md) (7.8.1 added the AirPlay 2 receiver; the TLS stack stayed
   at 2007).
 
-Hardware details and their sources (the two teardowns) are in [hardware.md](hardware.md).
+Hardware details and their sources (the teardowns; the flash chip and the partition names
+are Embedded Ideation's) are in [hardware.md](hardware.md).
 The partition sizes, the boot/verification behaviour, the image format, the CFE nvram
 keys, and `syBL` on this page were derived first-hand from the firmware and a read-only
 flash dump of an A1392 on 7.8.1.

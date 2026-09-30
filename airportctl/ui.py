@@ -27,7 +27,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, acp, cli, props
+from . import __version__, acp, cli, discover, props
 from . import mode as modemod
 from . import wifi as wifimod
 
@@ -40,7 +40,7 @@ CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline
 
 # Wi-Fi and mode changes are stored, then applied by the firmware at the next boot.
 NEEDS_REBOOT = {'name', 'wifi.ssid', 'wifi.secure', 'wifi.hidden', 'wifi.join', 'wifi.restore',
-                'mode.ctim', 'mode.wan'}
+                'mode.ctim', 'mode.wan', 'mode.sharing'}
 # Commands without a --dry-run flag: they run immediately.
 NO_DRY_RUN = {'led', 'wifi.backup', 'reboot', 'join.start', 'join.remove'}
 
@@ -101,6 +101,8 @@ ACTIONS = {
     'wifi.restore': lambda p: (['wifi', 'restore'], [_backup_file(p.get('file'))]),
     'mode.ctim': lambda p: (['mode', 'ctim'], ['now']),
     'mode.wan': lambda p: (['mode', 'wan'], ['wired']),
+    # only back to NAT: the page offers it as the fix for a bridge with no WAN link
+    'mode.sharing': lambda p: (['mode', 'sharing'], ['nat']),
     'reboot': lambda p: (['reboot'], []),
 }
 SECRET_OPTS = ('--wifi-password=',)
@@ -168,15 +170,18 @@ def status(state):
     try:
         gate, _ = modemod.read_gate(h, pw)
         role, reasons = modemod.join_blocked(gate)
-        sharing = next((k for k, t in modemod.SHARING.items()
-                        if t == (bool(gate.get('raNA')), bool(gate.get('raDS')),
-                                 bool(gate.get('raWB')))), 'custom')
-        out['gate'] = {'role': role, 'role_label': modemod.role_label(role), 'sharing': sharing,
+        out['gate'] = {'role': role, 'role_label': modemod.role_label(role),
+                       'sharing': modemod.sharing_of(gate),
                        'ctim': gate.get('ctim'), 'reasons': reasons,
                        'fixes': (['mode.wan'] if role == 6 else [])
                        + ([] if gate.get('ctim') else ['mode.ctim'])}
     except (RuntimeError, ValueError, OSError) as e:
         out['gate'] = {'error': str(e)}
+        return out
+    try:
+        out['uplink'] = modemod.uplink(h, pw, gate)
+    except (RuntimeError, ValueError, OSError) as e:
+        out['uplink'] = {'error': str(e)}
     return out
 
 
@@ -295,6 +300,11 @@ def make_handler(state, token, port):
                 self._send(200, join_status(state))
             elif self.path == '/api/backups':
                 self._send(200, {'dir': wifimod.BACKUP_DIR, 'backups': backups()})
+            elif self.path == '/api/discover':
+                self._send(200, {'default': discover.DEFAULT_HOST,
+                                 'default_answers': discover.answers(discover.DEFAULT_HOST),
+                                 'found': [{'host': h, 'interface': i}
+                                           for h, i in discover.find()]})
             else:
                 self._send(404, {'ok': False, 'error': 'not found'})
 

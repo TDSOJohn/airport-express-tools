@@ -142,8 +142,11 @@ every boot.
    Flash, moved AirPlay (advertised on the joined network) and cleared `autorun.try`.
 3. ☐ **Serial console first** (debug header, 115200 8N1, see [hardware.md](hardware.md)).
    It's the only way back in if the new bank A passes its checksum but fails to boot.
-4. ☐ Confirm A and B are identical stock 7.8.1. Then upload to **bank A** (command 3,
-   or `fupp` + `fust`, then reboot). B stays stock.
+4. ◐ ~~Confirm A and B are identical stock 7.8.1.~~ They aren't: the full dump
+   (2026-09-28, all five partitions, checksums verified) shows bank A = 7.8.1 and bank
+   B = 7.6.2. So the automatic fallback is 7.6.2, and bank A can be restored from the
+   dump over the CFE console (see [boot.md](boot.md#the-cfe-consoles-commands)). Next:
+   upload to **bank A** (command 3, or `fupp` + `fust`, then reboot). B stays as it is.
 5. ☐ Boot test: no `autorun.sh` (should behave like stock), then a script that writes a
    timestamp, then the Wi-Fi join ([join-mode.md](join-mode.md)).
 

@@ -4,7 +4,10 @@ ACP exposes two things: ~520 **properties** (`getprop`/`setprop`, opcodes 0x14/0
 **RPCs** (opcode 0x19), which carry a CFL plist `{function: <name>, inputs: {...}}` and
 return `{status: ..., outputs: {...}}`. The RPCs are the richer interface — they are what
 AirPort Utility and the base station's own daemons use for anything that isn't a flat
-setting — and they are not documented anywhere else.
+setting. Embedded Ideation's
+[2016 notes](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/) mention that
+the RPC interface exists (with WPS and DHCP operations, among others) but leave it
+unimplemented; we found no published list of the RPCs.
 
 This page covers every RPC the firmware registers. Each one was classified by reading its
 decompiled handler, and the read-only ones were **called on a live A1392 (7.8.1) on
@@ -16,12 +19,12 @@ airportctl rpc acprpc.show               # the live registry, straight from the 
 airportctl rpc wifi.scan.results.wlan1   # read-only calls need no --force; inputs are filled in
 ```
 
-## Two registries, 87 names
+## Two registries, 88 names
 
-`acprpc.show` prints the daemon's live registry. The firmware has **87** distinct RPC names
+`acprpc.show` prints the daemon's live registry. The firmware has **88** distinct RPC names
 (the per-interface set counted once). How many are registered at a time depends on the
-state: **107** on the test unit as a normal two-radio access point, 85 in the join-test
-state below. They come from two sources:
+state: **107** on the test unit as a normal two-radio access point with the WAN unplugged,
+**109** with a wired WAN uplink (DHCPv6 adds two), 85 in the join-test state below. They come from two sources:
 
 * **ACPd's own** — registrar `FUN_006717dc`, listed with flags `0x0`/`0x1`. 55 names;
   the regenerated map is `re/rpc_map.txt`. 54 were live in both states: all but
@@ -34,7 +37,7 @@ state below. They come from two sources:
   |---|---|
   | hostapd, **one set per Wi-Fi interface** (`wlan1` below) | `wifi.{channel,mcs,tx.rate,mcast.rate}.{get,set}.<if>`, `wifi.statistics.<if>`, `wifi.scan.{results,request}.<if>`, `wifi.{debug,ampdu}.set.<if>`, `wifi.rotate.gtk.<if>`, `wifi.tal.{add_update,remove}.<if>`, `wifi.neighbor.set.<if>`, `wsc.internal.{start,stop,preauthorize,authorize,denied}.<if>` |
   | dhcpd | `dhcp.server.leases.get` |
-  | dhclient | `dhcp.client.interface.state`, `dhcp.client.lease.action` (+ `dhcp6.client.interface.state` when DHCPv6 runs) |
+  | dhclient | `dhcp.client.interface.state`, `dhcp.client.lease.action`; the DHCPv6 instance (`dhclient -P`, started once the WAN has link) registers `dhcp6.client.interface.state` + `dhcp6.client.lease.action` instead (family 24 = `AF_INET6`, `FUN_00556de0`) |
   | mDNSResponder | `mdns.btmm.user`, `mdns.btmm.clearAllUsers`, `icloud.mdns.lhbag` |
   | iCloudd | `icloud.newcastle.bag`, `icloud.mdns.badsig`, `icloud.cached.lhbag` |
 
@@ -45,8 +48,9 @@ state below. They come from two sources:
 
 Per-interface names only exist while that interface's hostapd is running. As a normal
 access point both radios' sets were registered: 53 remote names = 22 for `wlan0` + 22 for
-`wlan1` + the 9 from dhcpd, dhclient, mDNSResponder and iCloudd (`dhcp6.client.interface.state`
-was absent, no DHCPv6 on the WAN). In the join-test state (the replacement supplicant from
+`wlan1` + the 9 from dhcpd, dhclient, mDNSResponder and iCloudd (the two `dhcp6.client.*` names
+were absent: WAN unplugged, no DHCPv6). With the WAN cabled (2026-09-28) they appear: 55
+remote, 109 total; every read-only call returned the same shape as before. In the join-test state (the replacement supplicant from
 [join-mode.md](join-mode.md) on `wlan2`, `wlan0` destroyed) only `wlan1`'s set was there.
 `wifi.statistics.wlan0` failed as unknown, even though `acpd.system.show` still listed
 `wlan0`: ACPd's own view goes stale when something outside it changes the interfaces.
@@ -127,7 +131,7 @@ returns your neighbours' networks. Don't paste either into a public issue unedit
 | `acp.injectPacket` | `packetInfo`: writes a raw frame to `/dev/bpf` (Ethernet or 802.11) |
 | `user.checkFileSharingAccess` | `flags`, `user`, `pass` → `access`, `info`: checks credentials against the file-sharing user list (`usrd`) |
 | `wsc.start` / `wsc.stop` / `wsc.authorize` | open/close a WPS window, authorize a client by MAC + PIN (flags 0x1) |
-| `dhcp.client.lease.action`, `dhcp.client.interface.state` | ACPd → dhclient commands (renew/release, interface up/down) |
+| `dhcp.client.lease.action`, `dhcp.client.interface.state`, `dhcp6.client.lease.action`, `dhcp6.client.interface.state` | ACPd → dhclient commands (renew/release, interface up/down), v4 and v6 instance |
 | `mdns.btmm.clearAllUsers`, `icloud.newcastle.bag`, `icloud.mdns.badsig`, `icloud.cached.lhbag` | BTMM / iCloud housekeeping (commands to mDNSResponder / iCloudd; handlers not read) |
 
 ### event (daemon → ACPd notifications; don't call)

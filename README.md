@@ -41,7 +41,7 @@ undone.
 | After `wifi join` it broadcasts the *target* network's name as an access point | The same restore. `wifi join` refuses this case unless forced with `--force`; see [below](#the-interesting-bit-join-a-wireless-network) |
 | You ran `crossdev/wpa-build/join-test.sh` | `tools/essh.sh /sbin/reboot`, or unplug it. It changes nothing that is stored |
 | You ran `airportctl join` and want it gone | `airportctl join remove`, then reboot. It changes no stored setting, only files on `/mnt/Flash` |
-| It's unreachable at 10.0.1.1 after `mode sharing bridge` or `dhcp` | It no longer runs DHCP on the cable. Run `python3 tools/find_express.py`, or a DHCP server on that interface |
+| It's unreachable at 10.0.1.1 after `mode sharing bridge` or `dhcp` | It no longer runs DHCP on the cable and takes its address from the WAN port. Leave out `--host`: airportctl then finds it over IPv6 link-local (the UI has a **Find it** button). `mode show` warns if the WAN port has no link; plug it in, or `mode sharing nat` and reboot. On your Wi-Fi after `join`: `python3 tools/find_express.py` |
 | You forgot the admin password | Soft reset (below) |
 | Nothing above works | Hard reset, then factory reset |
 
@@ -139,7 +139,7 @@ the build and the kernel ABI table are in [crossdev/wpa-build/](crossdev/wpa-bui
 | path | what |
 |---|---|
 | `airportctl/` | the CLI: `wifi show/ssid/secure/hidden/join/backup/restore`, `join` (our supplicant over SSH; the prebuilt binary is in `payload/`), `mode`, `rpc`, `led`, `name`, `info`, `reboot`, and `ui` (the same commands as a local web page). Python 3 stdlib only. See its [README](airportctl/README.md). |
-| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 87 RPCs, the read-only ones tested live), [properties](docs/properties.md) (the full 520-property dictionary, each read live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [boot](docs/boot.md) (the flash map and boot chain — and why the A1392 has no secure boot), [firmware](docs/firmware.md) (unpacking Apple's `.basebinary` on Linux — decrypt + gunzip + FFS — and what 7.8.1 changed: AirPlay 2 added, TLS frozen at 2007), [autorun](docs/autorun.md) (a one-hook custom image that runs `/mnt/Flash/autorun.sh` at boot, with a failsafe; built offline, not yet flashed), [security](docs/security.md) (the consolidated security profile — live attack surface, the 2007 crypto stack, firmware/control-plane/SSH/RF/physical trust boundaries, and a threat model), [hardware](docs/hardware.md) (the board: SoC, radios, the flash chip and its partitions, the serial/JTAG header), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
+| `docs/` | what the firmware actually does: [join-mode](docs/join-mode.md), [rpc-surface](docs/rpc-surface.md) (all 88 RPCs, the read-only ones tested live), [properties](docs/properties.md) (the full 520-property dictionary, each read live), [dbug](docs/dbug.md) (the debug bitfield — what `0x3000` really does, and why it turns SSH on), [boot](docs/boot.md) (the flash map and boot chain — and why the A1392 has no secure boot), [firmware](docs/firmware.md) (unpacking Apple's `.basebinary` on Linux — decrypt + gunzip + FFS — and what 7.8.1 changed: AirPlay 2 added, TLS frozen at 2007), [autorun](docs/autorun.md) (a one-hook custom image that runs `/mnt/Flash/autorun.sh` at boot, with a failsafe; built offline, not yet flashed), [security](docs/security.md) (the consolidated security profile — live attack surface, the 2007 crypto stack, firmware/control-plane/SSH/RF/physical trust boundaries, and a threat model), [hardware](docs/hardware.md) (the board: SoC, radios, the flash chip and its partitions, the serial/JTAG header), [wifi-blob](docs/wifi-blob.md), [hostapd-config](docs/hostapd-config.md), [extracting-acpd](docs/extracting-acpd.md) |
 | `ghidra_scripts/` | headless Ghidra scripts that produced those docs, incl. `NameFuncs.java` which recovers ~2310 function names ([README](ghidra_scripts/README.md)) |
 | `tools/` | `find_express.py`, `proptab.py` (dump the 520-entry ACP property table), `essh.sh` (debug shell), `mdns_probe.py`, `wait_for_reboot.py`, `pcap_summary.py`, `decrypt_basebinary.py` + `ufs1.py` (unpack a `.basebinary` offline — see [firmware](docs/firmware.md)), `repack_basebinary.py` (rebuild one with a replaced ramdisk file — see [autorun](docs/autorun.md)) |
 | `crossdev/` | cross-compile and run your own C on the device (NetBSD 4.0, mipseb) — see its [README](crossdev/README.md) |
@@ -171,7 +171,10 @@ on Windows, `~/Library/Application Support/airportctl/backups` on macOS).
 
 Connect your machine to the Express's **LAN** port (`‹•••›`), not the WAN port, with a profile
 that never takes the default route — see [docs/extracting-acpd.md](docs/extracting-acpd.md) §1
-for the `nmcli` recipe. Defaults are host `10.0.1.1`, admin password `public`.
+for the `nmcli` recipe. Defaults are host `10.0.1.1`, admin password `public`. Without `--host`,
+when 10.0.1.1 doesn't answer, airportctl looks for the base station over IPv6 link-local (an
+mDNS query for `_airport._tcp` on each network interface, no root needed) and says which address
+it used. That works on the cable even when the Express has no IPv4 address at all.
 
 ## Web UI
 
@@ -192,6 +195,9 @@ show a review step first, and the log shows the command each one ran.
 * **Local only.** It listens on `127.0.0.1`, accepts only that host name, and every request needs
   a one-time token that comes in the link it opens. Use that link rather than typing the
   address. The admin password stays in the bridge process and is never sent to the page.
+* **Can't reach it?** **Find it** (in Connection) looks for the base station over IPv6 link-local.
+  A **No uplink** banner appears when connection sharing isn't NAT and the WAN port has no
+  link, with a button to switch back to NAT.
 * **Wi-Fi changes apply after a reboot**, as on the command line. The page says so after each
   write and has a Reboot button. The status light changes at once.
 * **"Join a Wi-Fi network"** runs `airportctl join` ([above](#the-interesting-bit-join-a-wireless-network)): our own supplicant, over SSH,
@@ -244,8 +250,14 @@ keep it that way.
 Other ways to talk to an AirPort without AirPort Utility:
 
 * [airpyrt-tools](https://github.com/x56/airpyrt-tools) (Python 2): the original ACP
-  implementation. Its newer SRP login calls macOS's private `AppleSRP.framework`, so on Linux only
-  the old login works.
+  implementation, by x56 of Embedded Ideation. Its newer SRP login calls macOS's private
+  `AppleSRP.framework`, so on Linux only the old login works. The author's two write-ups are the
+  groundwork for most AirPort hacking:
+  [*Dissecting the AirPort Express*](https://www.embeddedideation.com/2014/03/dissecting-the-airport-express/)
+  (2014: the serial/JTAG header, the SPI flash chip and its partitions) and
+  [*AirPort Hacking Update*](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/)
+  (2016: the `cflbinary` plist format, `.basebinary` decryption, SRP and session encryption, a
+  NetBSD toolchain recipe, and an IDA script for crunchprog's CFStrings).
 * [node-acp](https://github.com/samuelthomas2774/node-acp) (Node.js): implements SRP login and
   session encryption, so the admin password never crosses the wire in the weak old format that
   airportctl uses. Prefer it if you can't use a direct cable.
@@ -254,12 +266,13 @@ What this repo adds: how the `WiFi` blob's security fields actually work (settin
 means writing an SSID-salted PMK, not the legacy properties), the client-mode gate and the
 firmware supplicant crash behind "join a wireless network", a working replacement supplicant, a
 cross-compiling setup for the device's NetBSD 4.0/MIPS userland, the front LED, and a map of all
-87 ACP RPCs, classified from their handlers, with the read-only ones called on a live unit.
+88 ACP RPCs, classified from their handlers, with the read-only ones called on a live unit.
 
 Built on:
 
 * [airpyrt-tools](https://github.com/x56/airpyrt-tools) (MIT) — the ACP protocol implementation
-  `airportctl/acp.py` is a port of it.
+  `airportctl/acp.py` is a port of it, including its `cflbinary` plist codec (`airportctl/cfl.py`)
+  and the `.basebinary` key scheme.
 * [node-acp](https://github.com/samuelthomas2774/node-acp) — ACP client/server, TypeScript types
   for the `WiFi` blob.
 * [wpa_supplicant](https://w1.fi/wpa_supplicant/) 0.7.3 (BSD) — fetched and built unmodified by

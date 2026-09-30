@@ -24,6 +24,7 @@ The three raNA/raDS/raWB predicates in the firmware are FUN_00653070/65304c/6530
 (FUN_0066dd88) and the config sanitiser (FUN_00672c30) produce, i.e. AirPort Utility's three
 "Connection Sharing" choices.
 """
+import re
 import struct
 import time
 
@@ -109,6 +110,57 @@ def join_blocked(gate):
         reasons.append('ctim is unset/0 (the base station has never been given a configuration '
                        'timestamp): the loader forces create/AP mode. Fix -> `mode ctim now`.')
     return role, reasons
+
+
+def sharing_of(gate):
+    """The "Connection Sharing" choice the stored raNA/raDS/raWB match, or 'custom'."""
+    flags = (bool(gate.get('raNA')), bool(gate.get('raDS')), bool(gate.get('raWB')))
+    return next((k for k, t in SHARING.items() if t == flags), 'custom')
+
+
+# acpd.system.show lists the switch PHYs; index 0 is the WAN port in every mode (in NAT it is
+# "linked to interface eth0", in bridge mode the switch maps both ports onto eth1).
+_PHY_LINK = re.compile(r'PHY \(0x[0-9A-Fa-f]+\) index (\d+)\s+Link State - Current\s+'
+                       r'\(link state ([^)]*)\)')
+
+
+def phy_links(show_text):
+    """{phy index: link text} from acpd.system.show, e.g. {0: 'is Down', 1: '100Mbps Full
+    Duplex'}; the text is normalised to single spaces."""
+    return {int(i): ' '.join(t.split())
+            for i, t in _PHY_LINK.findall(show_text)}
+
+
+def wan_link(host, password):
+    """The WAN port's link as ACPd sees it: e.g. '100Mbps Full Duplex', or None with no link."""
+    out = acp.rpc(host, password, 'acpd.system.show')
+    links = phy_links((out.get('outputs') or {}).get('output') or '')
+    if 0 not in links:
+        raise RuntimeError('acpd.system.show has no WAN port (PHY index 0) link state')
+    return None if links[0].lower().endswith('down') else links[0]
+
+
+def uplink_warning(sharing, link):
+    """Why the Express is cut off, or None. Outside NAT mode it is not the router at 10.0.1.1
+    and relies on the WAN port for its network, so with no WAN link nothing works: in bridge
+    mode (seen 2026-09-28) its LAN port and Wi-Fi got no DHCP and it had no working IPv4 address
+    itself, only IPv6 link-local."""
+    if sharing == 'nat' or link:
+        return None
+    return (f'connection sharing is {sharing} and the WAN port has no link: the Express is not '
+            'the router at 10.0.1.1, so devices on its LAN port and Wi-Fi get no address or '
+            'internet, and it has no working IPv4 address itself (airportctl can still reach '
+            'it over IPv6 link-local). Plug in the WAN cable, or switch back: '
+            '`airportctl mode sharing nat` and reboot.')
+
+
+def uplink(host, password, gate=None):
+    """{'sharing', 'wan_link', 'warning'} for the current state."""
+    if gate is None:
+        gate, _ = read_gate(host, password)
+    sharing = sharing_of(gate)
+    link = wan_link(host, password)
+    return {'sharing': sharing, 'wan_link': link, 'warning': uplink_warning(sharing, link)}
 
 
 def set_ctim(host, password, value):

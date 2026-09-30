@@ -47,6 +47,40 @@ listeners — `_hap._tcp` (HomeKit pairing), `_dacp._tcp`, `_mfi-config._tcp`, `
 legacy `_printer`/`_pdl-datastream`/`_riousbprint` print types — most of which are dormant unless
 the corresponding feature is configured.
 
+### WAN side (live, wired uplink)
+
+Measured 2026-09-28 with the WAN port cabled to a home router (Fastweb), unit in its default
+NAT/DHCP role, WAN lease `192.168.1.51`: full TCP connect scan (1–65535) and UDP probes from
+another host on the upstream network.
+
+* **Open from the WAN: udp/192, tcp/5009 (ACP), tcp/22 (SSH, because debug SSH is on).**
+  `airportctl --host <wan-ip> info` authenticates and works from the WAN side; SSH shows its
+  banner. Everything else is silently dropped (TCP) or rejected with ICMP unreachable (UDP).
+* The rules are ACPd's own pf ruleset (`pfctl -s rules`): `pass in on eth0 proto {udp 192,
+  tcp 5009, tcp ssh} to (eth0)` plus matching `no rdr` exemptions in the NAT table.
+* **The gate** is `FUN_0065e958`, which builds the WAN-open port list. It opens 192/5009 (and 22
+  unless `dbug` bit `0x200` is set; tcp+udp 5001 iperf unless `0x1000`/`0x2000`) only while the
+  byte at `0xe46edc` is 0. `FUN_0065746c` sets that byte at boot: **1 when NAT is off** (bridge
+  mode), otherwise the stored bool **`waNM`**. Factory/unconfigured value: `waNM = False`, so a
+  NAT-mode unit that was never set up in AirPort Utility **accepts admin connections from the
+  WAN**. The same byte posts the `waCF` problem ("setup over WAN is open"; see
+  [properties.md](properties.md#status-problems-syst)), so an amber LED with `waCF` is the tell.
+* Consequence: behind a home router, anyone on the home LAN reaches ACP and (with debug SSH)
+  root SSH on the Express's WAN address. With a public IP on the WAN port, that is the Internet.
+  The admin password is the only barrier.
+* In **bridge mode** there is no WAN side: the unit is an ordinary host on the upstream subnet,
+  so ACP (and debug SSH) are reachable from that whole network by design.
+
+### ACPd crashes on a misaligned `setprop` body (authenticated DoS)
+
+A `setprop` request carrying several properties, where a value's length isn't a multiple of 4
+(e.g. three 1-byte bools), kills ACPd with SIGSEGV. The next element header lands at an odd
+offset and ACPd reads it with a plain `lw`: fault at `pc 0x678718`, `cause` AdEL, `badvaddr` =
+body + 13 + 8 (seen live 2026-09-28). Nothing respawns ACPd: ACP (5009) and the `_airport` mDNS
+records stay dead until a reboot, while hostapd, AirPlay and sshd keep running. Nothing from the
+request is saved. The admin password is needed, so this is an authenticated denial of service.
+It's also a trap for tools: airportctl now sends one property per request (`acp.set_props`).
+
 ## Crypto inventory — frozen, with two exceptions
 
 Pulled from the 7.8.1 megabinary. The system TLS/SSH stack is **2007-vintage and unchanged**
@@ -103,9 +137,15 @@ them.
 * **Secrets are returned in cleartext** to an authenticated client: the WPA **PMK** (in the
   `WiFi` blob), and the admin/guest passwords `syPW`/`syPR`/`syGP`. Reading a property reads the
   stored secret, not a redaction.
-* **The transport is obfuscated, not encrypted.** ACP's framing uses a *public, static*
-  keystream (documented by node-acp / airpyrt-tools) — it is not a confidentiality control
-  against an on-path observer, and it is not a second factor.
+* **The legacy transport is obfuscated, not encrypted, and the firmware still accepts it.**
+  Newer firmware supports an **SRP** login (the password never crosses the wire) followed by
+  **AES-CTR session encryption** with per-direction keys derived by PBKDF (described by
+  [Embedded Ideation, 2016](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/);
+  implemented in node-acp). But 7.8.1 still accepts the old login, whose only protection is a
+  *public, static* keystream (documented by node-acp / airpyrt-tools). Every tool in this repo
+  uses that old login. So the admin password and all session data, including the secrets
+  above, cross the network readable by an on-path observer whenever a client uses the legacy
+  path, and nothing stops a client from choosing it.
 * **Destructive operations exist** behind the same single gate: reboot, flash write, factory
   reset (all `type 10` action properties; deliberately not exercised in our sweeps).
 
@@ -160,7 +200,7 @@ established in this repo.
 |---|---|---|
 | **Same LAN, no credential** | Enumerate services; force Wi-Fi disconnects (no PMF); attempt evil-twin; observe (obfuscated, not encrypted) ACP traffic; hit the AirPlay/RTSP receiver | mDNS + scan above; no-PMF; ACP obfuscation is public |
 | **Same LAN, has admin password** (default `public`) | Read the Wi-Fi PMK and all stored passwords in cleartext; change config; reboot; **reflash / brick**; push unsigned firmware over ACP | [properties.md](properties.md), [rpc-surface.md](rpc-surface.md); local flash path is unsigned |
-| **Internet / WAN** | Nothing *by default* — nothing above is meant to face the WAN. Real risk is misconfiguration (port-forwarding 5009/22 to it) or the 2007 TLS stack if any outbound TLS is induced | default surface is LAN-only; update transport is plaintext HTTP with a signed catalog |
+| **Internet / WAN** | **ACP (5009) and udp/192 face the WAN** in NAT mode while `waNM` is unset (the unconfigured default), plus SSH when debug SSH is on — the same power as "same LAN, has admin password" for anyone who has or guesses it. Closed in bridge mode or with `waNM` set. Also the 2007 TLS stack if any outbound TLS is induced | [WAN side](#wan-side-live-wired-uplink): measured scan + `FUN_0065e958`; update transport is plaintext HTTP with a signed catalog |
 | **RF range** | Deauth/evil-twin (no PMF); WPA2-PSK offline attack on captured handshakes | no 802.11w in NetBSD 4.0/hostapd |
 | **Physical / console** | Full unauthenticated root via UART; interrupt boot via CFE; **persistent** malicious reflash (no secure boot) | UART shell + `CFE>`; Adler-32/`minS`-only boot check |
 
@@ -197,6 +237,8 @@ machinery, and the service map were read from the 7.8.1 root filesystem extracte
 [rpc-surface.md](rpc-surface.md), [properties.md](properties.md), [dbug.md](dbug.md) and
 [boot.md](boot.md). ACP obfuscation and the per-model firmware keys are credited to
 [node-acp](https://github.com/samuelthomas2774/node-acp) and
-[airpyrt-tools](https://github.com/x56/airpyrt-tools); the UART/JTAG and board details to
-[Embedded Ideation](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/) and the
-Rogue Amoeba teardown.
+[airpyrt-tools](https://github.com/x56/airpyrt-tools); the UART/JTAG and board details, the
+SPI flash chip and its partition names to Embedded Ideation
+([2014](https://www.embeddedideation.com/2014/03/dissecting-the-airport-express/),
+[2016](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/)) and the Rogue Amoeba
+teardown.

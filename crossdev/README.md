@@ -44,7 +44,7 @@ The kernel also refuses a native ELF executable unless it carries a `.note.netbs
 | libc from a newer NetBSD | Not tried. From 5.0 on, libc calls versioned syscalls (e.g. the 64-bit `time_t` ones) that a 4.0 kernel lacks. |
 | Linux toolchain libcs (glibc, musl, uClibc) | Linux syscall ABI, so they don't run. Only the compiler is useful, for freestanding code. |
 | zig or clang + lld | Not tried. Fine for freestanding code in principle; GNU ld is the safer linker for NetBSD 4.0's old PIC `libc.a`. |
-| A real `mipseb--netbsd` toolchain via NetBSD's `build.sh tools` | Heavier (full NetBSD source tree). Only worth it for C++ or large ports. |
+| A real `mipseb--netbsd` toolchain via NetBSD's `build.sh tools` | Heavier (full NetBSD source tree). Only worth it for C++ or large ports. [Embedded Ideation's 2016 post](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/) has a recipe (`build.sh tools`, then `release`, then copy `dest/usr/lib` into the tools dir). It notes that building the 4.0 tree was easiest from an old host (an Ubuntu 7.04 VM). |
 | Compiling on the device | No compiler, 732 KB free on `/`, 64 MB RAM. |
 
 ## Storage, USB and persistence

@@ -104,6 +104,7 @@ dialog h2 { margin-bottom: 6px; }
     <button id="reboot2">Reboot now</button>
   </div>
   <div id="error-banner" class="banner bad" hidden></div>
+  <div id="uplink-banner" class="banner warn" hidden></div>
   <div id="untested-banner" class="banner warn" hidden></div>
 
   <div class="grid">
@@ -172,8 +173,10 @@ dialog h2 { margin-bottom: 6px; }
         <label class="f">Base station address<input type="text" id="conn-host" autocomplete="off"></label>
         <label class="f">Admin password<input type="password" id="conn-pw" placeholder="unchanged" autocomplete="off"></label>
         <button id="conn-go">Connect</button>
+        <button id="conn-find">Find it</button>
       </div>
-      <p class="hint">Use a direct cable: ACP only lightly obfuscates the admin password.</p>
+      <div id="conn-found" class="row" style="margin-top:8px" hidden></div>
+      <p class="hint">Use a direct cable: ACP only lightly obfuscates the admin password. <b>Find it</b> looks for the base station over IPv6 link-local on every network of this computer, which works on the cable even when it has no IPv4 address.</p>
     </section>
 
     <section class="card wide" id="join-card">
@@ -294,7 +297,15 @@ function render() {
     ? [s.host, d.model, 'firmware ' + d.firmware, d.uptime && ('up ' + d.uptime)].filter(Boolean).join(' · ')
     : (s.host ? s.host + ' · not connected' : 'connecting…');
   $('error-banner').hidden = !s.error;
-  $('error-banner').textContent = s.error ? 'Cannot read the base station at ' + s.host + ': ' + s.error : '';
+  $('error-banner').textContent = s.error ? 'Cannot read the base station at ' + s.host + ': ' + s.error
+    + '. Try Find it (in Connection) to look for it over IPv6 link-local.' : '';
+  const up = s.uplink || {};
+  $('uplink-banner').hidden = !up.warning;
+  $('uplink-banner').replaceChildren();
+  if (up.warning) $('uplink-banner').append(h('span', {}, h('b', {}, 'No uplink. '), up.warning),
+    h('button', { onclick: () => review('mode.sharing', {}, 'Switch connection sharing back to NAT?',
+      'Stored now, applied at the next reboot: the Express is then the router at 10.0.1.1 again and hands out addresses on its LAN port and Wi-Fi.') },
+      'Switch back to NAT…'));
   $('reboot-banner').hidden = !s.pending_reboot;
 
   const ub = $('untested-banner');
@@ -604,11 +615,36 @@ for (const id of ['ssid-name', 'bs-name', 'jn-name']) $(id).addEventListener('in
 $('ssid-radio').onchange = updateForms;
 $('sec-mode').onchange = updateForms;
 
-$('conn-go').onclick = async () => {
-  const res = await api('connect', { host: $('conn-host').value, password: $('conn-pw').value });
+$('conn-go').onclick = () => connectTo($('conn-host').value);
+
+async function connectTo(host) {
+  const res = await api('connect', { host, password: $('conn-pw').value });
   $('conn-pw').value = '';
   if (!res.ok) { await dialog('Connect', '', res, null); return; }
+  $('conn-found').hidden = true;
   await refresh();
+}
+
+$('conn-find').onclick = async () => {
+  if (busy) return;
+  setBusy(true);
+  const box = $('conn-found');
+  box.hidden = false;
+  box.replaceChildren(h('span', { class: 'sub' }, 'Looking…'));
+  const res = await api('discover');
+  setBusy(false);
+  box.replaceChildren();
+  if (res.error || res.ok === false) { box.append(h('span', { class: 'bad-t' }, res.error)); return; }
+  const found = res.found || [];
+  if (!found.length) {
+    box.append(h('span', { class: 'sub' }, (res.default_answers ? res.default + ' answers, but nothing'
+      : 'Nothing answers at ' + res.default + ' and nothing') + ' answered over IPv6 link-local. Is it powered on and cabled?'));
+    return;
+  }
+  if (found.length === 1 && !res.default_answers) { await connectTo(found[0].host); return; }
+  box.append(h('span', { class: 'sub' }, 'Found:'),
+    ...(res.default_answers ? [{ host: res.default, interface: 'IPv4' }] : []).concat(found).map(f =>
+      h('button', { onclick: () => connectTo(f.host) }, f.host.split('%')[0] + ' (' + f.interface + ')')));
 };
 
 async function doReboot() {

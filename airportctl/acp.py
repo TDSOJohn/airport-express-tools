@@ -105,8 +105,19 @@ def get_raw(host, password, name, timeout=10):
 
 
 def set_props(host, password, props, timeout=15):
-    """Set (name, raw bytes) pairs; return [(name, error_code)] for any the device rejected."""
-    body = b''.join(ELEM.pack(n.encode('latin1'), 0, len(v)) + v for n, v in props)
+    """Set (name, raw bytes) pairs; return [(name, error_code)] for any the device rejected.
+
+    One request per property: ACPd parses a multi-element body with unaligned word loads, so
+    an element whose value length isn't a multiple of 4 (a 1-byte bool) makes the next header
+    misaligned and ACPd dies with SIGSEGV (AdEL, seen live 2026-09-28 on raNA/raDS/raWB)."""
+    failures = []
+    for name, value in props:
+        failures += _set_one(host, password, name, value, timeout)
+    return failures
+
+
+def _set_one(host, password, n, v, timeout):
+    body = ELEM.pack(n.encode('latin1'), 0, len(v)) + v
     failures = []
     with socket.create_connection((host, ACP_PORT), timeout=timeout) as s:
         s.sendall(_compose(CMD_SETPROP, 0, password, body))

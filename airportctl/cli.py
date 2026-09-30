@@ -6,7 +6,7 @@ import pprint
 import struct
 import sys
 
-from . import acp, mode as modemod, props, rpc as rpcmod
+from . import acp, discover, mode as modemod, props, rpc as rpcmod
 from . import wifi as wifimod
 
 
@@ -326,11 +326,17 @@ def cmd_mode_show(args):
     print('stored properties (read at daemon init):')
     for n in modemod.GATE_PROPS:
         print('  ' + fmt(n))
-    sharing = next((k for k, t in modemod.SHARING.items()
-                    if t == (bool(gate.get('raNA')), bool(gate.get('raDS')), bool(gate.get('raWB')))),
-                   'custom')
+    sharing = modemod.sharing_of(gate)
     print(f'\nconnection sharing = {sharing}')
     print(f'device role (ACPd ctx+0x24) = {role}  ({modemod.role_label(role)})')
+    try:
+        link = modemod.wan_link(args.host, args.password)
+        print(f'WAN port link = {link or "none"}')
+        warning = modemod.uplink_warning(sharing, link)
+        if warning:
+            print('!! ' + warning)
+    except (RuntimeError, ValueError, OSError) as e:
+        print(f'WAN port link = ? (could not read it: {e})')
     try:
         wifi, _ = wifimod.load(args.host, args.password)
         for i, r in enumerate(wifimod.radios(wifi)):
@@ -369,9 +375,10 @@ def cmd_mode_sharing(args):
     new = modemod.SHARING[args.choice]
     print(f'connection sharing: raNA/raDS/raWB {old} -> {new}  ({args.choice})')
     if args.choice != 'nat':
-        print('!! in bridge/dhcp mode the Express stops being the DHCP router at 10.0.1.1.\n'
-              '   Over the cable it will fall back to a link-local address - find it again with\n'
-              '   `python3 tools/find_express.py` or run a DHCP server on that cable before rebooting it.')
+        print('!! in bridge/dhcp mode the Express stops being the DHCP router at 10.0.1.1 and\n'
+              '   takes its address from the network on its WAN port: keep that cable plugged in.\n'
+              '   Over the dock cable airportctl still finds it over IPv6 link-local when you\n'
+              '   leave out --host; `mode show` warns when the WAN port has no link.')
     if args.dry_run:
         print('dry run, nothing written')
         return
@@ -417,6 +424,12 @@ def cmd_join_start(args):
 def cmd_join_status(args):
     from . import join
     print(join.describe(join.status(args.host, args.password)))
+    try:
+        warning = modemod.uplink(args.host, args.password)['warning']
+    except (RuntimeError, ValueError, OSError):
+        return  # the join status above is what was asked for
+    if warning:
+        print('!! ' + warning)
 
 
 def cmd_join_remove(args):
@@ -441,7 +454,8 @@ def build_parser():
         prog='airportctl',
         description='Configure a 2nd-gen AirPort Express (A1392) over the ACP admin protocol. '
                     'Use over a trusted direct cable only.')
-    p.add_argument('--host', default='10.0.1.1', help='base station IP (default: 10.0.1.1)')
+    p.add_argument('--host', help=f'base station address (default: {discover.DEFAULT_HOST}, or '
+                                  'the one found over IPv6 link-local if that does not answer)')
     p.add_argument('-p', '--password', default=acp.default_password(), metavar='PW',
                    help='admin password, or @FILE to read it from a file (default: $AIRPORT_PW, '
                         'else @$AIRPORT_PW_FILE or @~/.config/airport-express/admin-pw if it '
@@ -610,6 +624,9 @@ def main(argv=None):
         # @FILE is a command-line convenience, so it is resolved here and not in the commands:
         # the UI passes typed values straight through, where a leading @ is just a character.
         args.password = acp.read_password(args.password)
+        if args.host is None:
+            args.host = (discover.DEFAULT_HOST if getattr(args, 'list', False)
+                         else discover.resolve_default(lambda m: print(m, file=sys.stderr)))
         for name in ('wifi_password', 'secret', 'new'):
             if getattr(args, name, None):
                 setattr(args, name, acp.read_password(getattr(args, name)))

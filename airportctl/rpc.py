@@ -109,6 +109,7 @@ REMOTE_RPCS = {
     'dhcp.client.lease.action': (0x2, '0x00555624', [('action', 10, False, None)]),
     'dhcp.server.leases.get': (0x2, '0x005205fc', [('pool', 10, False, None), ('data', 5, True, None)]),
     'dhcp6.client.interface.state': (0x2, '0x00555588', [('state', 10, False, None)]),
+    'dhcp6.client.lease.action': (0x2, '0x005554fc', [('action', 10, False, None)]),  # shared tail j 0x55808c, missed by RpcMap; seen live with a wired WAN
     'icloud.cached.lhbag': (0x2, '0x005ed874', [('cachedFlag', 9, False, None)]),
     'icloud.mdns.badsig': (0x2, '0x005ed6a0', [('domain', 10, False, None), ('badSigFlag', 9, False, None)]),
     'icloud.mdns.lhbag': (0x2, '0x006b5cec', [('lhBagData', 2, False, None)]),
