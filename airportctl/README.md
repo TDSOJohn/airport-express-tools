@@ -2,6 +2,8 @@
 
 A small, safety-first CLI to configure a 2nd-gen **AirPort Express (A1392)** over Apple's
 ACP admin protocol (TCP 5009) — built on the reverse-engineering in [`../docs/`](../docs/).
+On other models it reads, and writes only with `--untested`; what works where:
+[`../docs/models.md`](../docs/models.md#airportctl-on-each-model).
 
 > Use over a **trusted direct cable** only. The admin password is only lightly obfuscated on
 > the wire. Default host `10.0.1.1`, default admin password `public`.
@@ -43,21 +45,24 @@ mode show                                  the join gate: ctim, waCV, sharing pr
 mode ctim [now|N]                          store the configuration timestamp (opens the gate)
 mode sharing nat|dhcp|bridge               connection sharing (raNA/raDS/raWB)
 mode wan wired|wireless|show               waCV WAN-uplink bit (only if role 6 shows up)
-rpc --list                                 the 87 mapped ACP RPCs; unmarked = verified read-only
-rpc NAME [--json '{..}'] [--force]         call one; read-only ones need no inputs or --force
+rpc --list                                 the 88 mapped ACP RPCs; unmarked = verified read-only
+rpc NAME [--json '{..}'] [--force]         call one; read-only ones need no inputs, and no --force
+                                           on a tested model/firmware
 led  [show|auto|amber|green|N]             front status LED (LEDc): live, no reboot
 name  BASE-STATION-NAME                    set base station name (syNm)
 admin-password [PW|@FILE]                  change the admin password (syPW); prompts if omitted.
                                            ACP switches at once, the debug SSH login at next reboot
 ui [--port N] [--no-browser]               local web page for the everyday commands; writes are
                                            previewed first (see "Web UI" in ../README.md)
-info                                       model (syAP), firmware (syVs), uptime; tested or not
+info                                       model (syAP), firmware (syVs), uptime, Wi-Fi chip, CPU;
+                                           tested or not; whether `join` can run on it
 reboot                                     reboot (needed to apply Wi-Fi changes)
 
 flags:  --radio N   only that radio (default: both)
         --dry-run   show the change, write nothing
         --reboot    reboot right after writing
         --no-backup skip the pre-write blob backup
+        --untested  write to a model/firmware not verified yet (refused otherwise)
 ```
 
 ## Examples
@@ -68,82 +73,53 @@ printf %s 'my-wifi-pass' > ~/.wifipw && chmod 600 ~/.wifipw
 python3 -m airportctl wifi secure wpa2 @~/.wifipw --reboot     # set password, apply
 python3 -m airportctl wifi secure open --reboot                # back to open
 airportctl wifi ssid "LivingRoom" --wifi-password @~/.wifipw --reboot   # rename + keep WPA2
-```
-The WPA PMK is derived from the SSID, so renaming an encrypted network needs the PMK
-re-derived — pass `--wifi-password` to `wifi ssid`, or run `wifi secure ...` afterwards.
-
-```sh
-airportctl led               # show current LED state
-airportctl led amber         # force solid amber (live, no reboot)
-airportctl led green         # force solid green
-airportctl led auto          # back to the default status behaviour
-```
-The `led` command sets the `LEDc` property. It takes effect immediately (unlike Wi-Fi
-changes), and only values `0`–`3` are honoured: `0` auto, `1` amber, `2`/`3` green — the
-device silently ignores anything higher. Verified on-device 2026-09-15. Because it is
-scriptable and instant, the LED can double as a status indicator (see the note below).
-
-## Client / "join a wireless network" mode
-
-**This mode cannot be made to work on firmware 7.8.1.** `wifi join` and `mode` are provided for
-inspection and for the research write-up, not because a join succeeds. Two firmware layers block
-it (full detail in [`../docs/join-mode.md`](../docs/join-mode.md)):
-
-1. **A gate** in `FUN_00689ab8` ignores `raSt` unless the stored configuration timestamp `ctim`
-   is set (and the device role isn't 6):
-
-   ```c
-   if (device_role == 6 || ctim == 0) { raSt = 0; /* forced create/AP */ }
-   ```
-
-   A base station only ever written by hand over ACP has no `ctim`, so it silently stays an AP —
-   and, with a join blob applied, an evil-twin AP carrying the target SSID. `mode show` reports
-   this; `mode ctim now` opens the gate, and the radio then genuinely enters station mode.
-
-2. **The supplicant crash.** Once the gate is open, the firmware's `wpa_supplicant` (v0.6.5)
-   segfaults at startup — its `net80211` driver fails to add the station interface, before any
-   scan or association. `--psta` (proxy-STA) crashes identically. This is a firmware bug with no
-   configuration workaround.
-
-```sh
-airportctl mode show            # gate state: ctim, role, per-radio raSt
-airportctl mode ctim now        # opens the gate (persists; read-back verified)
-airportctl wifi join YOUR-SSID --wifi-password @~/.wifipw --band 2.4 --reboot
+airportctl led amber         # live, no reboot; led auto = back to status behaviour
 ```
 
-`mode sharing` is AirPort Utility's "Connection Sharing": `nat` (factory: NAT + DHCP at
-10.0.1.1), `dhcp` (hand out leases, no NAT) or `bridge` (off — what you want for AirPlay on the
-house LAN). In bridge mode the Express stops serving DHCP on the cable, so find it again with
-`python3 ../tools/find_express.py`.
+| Behaviour | |
+|---|---|
+| Wi-Fi changes | apply at the next **reboot** (`/etc/hostap_wlanN.conf` is regenerated at boot) |
+| Renaming a WPA network | the PMK depends on the SSID: pass `--wifi-password` to `wifi ssid`, or run `wifi secure …` after |
+| WPS | turns on by itself with WPA2-PSK |
+| `led` | sets `LEDc` live: `0` auto, `1` amber, `2` / `3` green; higher values ignored |
+| `name` | `syNm` is stored at once; hostname and `.local` follow at the next reboot |
+| `admin-password` | ACP uses the new password at once, the debug SSH login after a reboot |
 
-## How it works (verified on-device 2026-09-14)
-The live config is the `WiFi` property — a CFL blob `{'radios': [ {<fourcc>: value}, ... ]}`.
-Per-radio keys this tool sets:
+## `WiFi` keys written
 
-| key  | meaning | notes |
-|------|---------|-------|
+The live config is the `WiFi` property, `{'radios': [ {<fourcc>: value}, ... ]}`
+([wifi-blob.md](../docs/wifi-blob.md)).
+
+| Key | Meaning | Value written |
+|---|---|---|
 | `raNm` | SSID | 1–32 bytes |
-| `raWM` | security mode | 0 open · 1/2 WEP · 3 WPA · 5 **WPA2** · 4/6/7 WPA+WPA2 mixed |
-| `raWE` | key material | WPA: the 32-byte PMK `PBKDF2-HMAC-SHA1(pw, ssid, 4096, 32)`; WEP: raw key bytes |
-| `raEA` | 802.1X/EAP | forced `False` (PSK) |
+| `raWM` | security mode | 0 open · 1 WEP · 3 WPA · **5 WPA2** · 7 WPA + WPA2 |
+| `raWE` | key material | WPA: PMK = `PBKDF2-HMAC-SHA1(pw, ssid, 4096, 32)`; WEP: raw key bytes |
+| `raEA` | 802.1X / EAP | `False` (PSK) |
 | `raCl` | hidden network | bool |
+| `raSt` | radio role (`wifi join`) | 1 = join |
 
-Wi-Fi changes only take effect after a **reboot** (the device regenerates
-`/etc/hostap_wlanN.conf` at boot, not on write). WPS auto-enables for WPA2-PSK — normal.
+## Client mode
+
+| Command | Path | A1392 / 7.8.1 |
+|---|---|---|
+| `join install` / `start` / `status` / `remove` | our wpa_supplicant 0.7.3 on `/mnt/Flash`, over the debug SSH login | works (WPA2-PSK, 2.4 GHz, DHCP or fixed address); redo `join start` after each reboot on stock firmware |
+| `wifi join` | the firmware's own client mode (`raSt = 1`) | gate opens with `mode ctim now`, then the firmware supplicant crashes; does not connect |
+| `mode show` | reads `ctim`, `waCV`, `raNA` / `raDS` / `raWB` / `waUB`, per-radio `raSt`; prints the role and whether the gate is open | |
+| `mode ctim [now\|N]` | stores the configuration timestamp (read back) | |
+| `mode sharing nat\|dhcp\|bridge` | AirPort Utility's Connection Sharing: `nat` = factory NAT + DHCP at 10.0.1.1; `dhcp` = leases, no NAT; `bridge` = off. Without NAT the Express no longer serves DHCP on the cable: find it with `python3 ../tools/find_express.py` or over IPv6 link-local | |
+| `mode wan wired\|wireless\|show` | `waCV` uplink bit; only needed if role 6 shows up | |
+
+`wifi join` refuses to write while the gate is closed: that case produces an AP carrying the
+target SSID and PMK (an evil twin). Details: [join-mode.md](../docs/join-mode.md).
 
 ## Safety
-Every write: parses the live blob and refuses if it doesn't re-encode byte-identically,
-auto-backs-up to `WiFi-pre-write-<ts>.cfb` in the backup directory, writes, then reads back and
-confirms. That directory is `../backups/` in a checkout (and an editable install), otherwise a
-per-user state directory such as `~/.local/state/airportctl/backups`; `wifi -h` prints it.
 
-The backups hold **your base station's real configuration**, including the 32-byte WPA PMK
-derived from your Wi-Fi passphrase. In a checkout, `backups/` is in `.gitignore` but still inside
-the working tree, so don't copy or archive the tree wholesale, or set `AIRPORTCTL_BACKUP_DIR` to
-somewhere outside it, e.g. `export AIRPORTCTL_BACKUP_DIR=~/.local/state/airportctl/backups`.
-Recover from any of those backups:
-```sh
-python3 -m airportctl wifi restore ../backups/WiFi-pre-write-<ts>.cfb --reboot
-```
-`wifi restore` re-parses the file before sending it, and backs up the config it is about to
-replace.
+| | |
+|---|---|
+| Before each write | parse the live blob, refuse if it doesn't re-encode byte-identically; back it up to `WiFi-pre-write-<ts>.cfb` |
+| After each write | read back and confirm |
+| Backup directory | `../backups/` in a checkout (and an editable install), else a per-user state directory (`~/.local/state/airportctl/backups`); `wifi -h` prints it; `AIRPORTCTL_BACKUP_DIR` overrides |
+| Backup contents | the real configuration including the PMK. `backups/` is git-ignored but inside the tree: don't archive the tree wholesale, or point `AIRPORTCTL_BACKUP_DIR` outside it |
+| Restore | `python3 -m airportctl wifi restore ../backups/WiFi-pre-write-<ts>.cfb --reboot` (re-parses the file, backs up the config it replaces) |
+| `setprop` | one property per request ([security.md](../docs/security.md#known-bugs)) |

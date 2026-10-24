@@ -27,7 +27,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import __version__, acp, cli, discover, props
+from . import __version__, acp, cli, discover, models, props
 from . import mode as modemod
 from . import wifi as wifimod
 
@@ -130,8 +130,7 @@ class State:
 
 def _radio_view(i, r):
     ch = r.get('raCh')
-    band = ('5 GHz' if ch > 14 else '2.4 GHz') if isinstance(ch, int) and ch else \
-        ('2.4 GHz' if i == 0 else '5 GHz')
+    band = wifimod.band(i, r) + ' GHz'
     wm = r.get('raWM', 0)
     kind = ('open' if wm == 0 else 'wep' if wm in (1, 2) else 'wpa' if wm == 3 else
             'wpa2' if wm == 5 else 'mixed')
@@ -147,13 +146,13 @@ def status(state):
     out = {'host': h, 'version': __version__, 'pending_reboot': state.pending_reboot,
            'backup_dir': wifimod.BACKUP_DIR}
     try:
-        dev = cli.read_device(h, pw)
+        dev = acp.read_device(h, pw)
     except (RuntimeError, ValueError, OSError) as e:
         out['error'] = str(e)
         return out
     out['device'] = {
         'name': dev.get('syNm'), 'product': dev.get('syAP'),
-        'model': props.product_label(dev.get('syAP')), 'firmware': dev.get('syVs'),
+        'model': models.label(dev.get('syAP')), 'firmware': dev.get('syVs'),
         'uptime': str(datetime.timedelta(seconds=dev['syUT'])) if 'syUT' in dev else None,
         'tested': cli.is_tested(dev), 'report_url': cli.REPORT_URL}
     try:

@@ -1,111 +1,94 @@
-# The ACP property dictionary (firmware 7.8.1)
+# ACP properties
 
-`ACPd` exposes a flat namespace of **520 properties**, each a four-character code
-(fourcc) with a type and a flags byte. This is the `getprop`/`setprop` layer of ACP
-(TCP 5009, commands `0x14`/`0x15`) — distinct from the RPC layer (`0x19`, see
-[rpc-surface.md](rpc-surface.md)). AirPort Utility is built on exactly these two
-layers. This page is the dictionary: every fourcc, its type/flags from the binary,
-and what a **read-only** sweep of a live A1392 returned for it.
+ACPd's flat namespace of **520 properties**: fourcc, type, flags. ACP `getprop` / `setprop`
+(TCP 5009, commands `0x14` / `0x15`); RPCs (`0x19`) are in [rpc-surface.md](rpc-surface.md).
+The `WiFi` blob: [wifi-blob.md](wifi-blob.md). `dbug`: [dbug.md](dbug.md).
 
-The table itself (fourcc, type, flags) comes from `tools/proptab.py` reading the
-property table in `ACPd` (VMA `0xc5af38`, 12-byte records, zero-terminated). The
-live disposition column comes from a `getprop` sweep on **2026-09-24** of an A1392
-(7.8.1) in its normal AP role. Related decoded structures live in
-[wifi-blob.md](wifi-blob.md) (the `WiFi` blob) and [dbug.md](dbug.md) (the `dbug`
-bitfield).
+Table source: ACPd's property table at VMA `0xc5af38` (12-byte records `{fourcc, type,
+flags}`, zero-terminated; lookup `FUN_00807418`), dumped by
+`python3 tools/proptab.py ACPd.bin [fourcc …]` (F). Read results: read-only `getprop` sweep of
+an A1392 on 7.8.1 in its default NAT/AP role, WAN unplugged (L). Readable counts on other
+models: [models.md § ACP and access](models.md#acp-and-access).
 
-## How reads work
+## Reads
 
-* **`getprop` is authenticated.** Every read carries the admin password in the ACP
-  header key; a wrong password is rejected with `0xfffffff0` before any property is
-  returned (confirmed live). There is **no unauthenticated read** — the "auth-required
-  per property" idea doesn't apply: auth is at the connection, not per property.
-* **Two ways to read.** A *named* get resolves each fourcc through
-  `ACPGetPropertyDirect(fourcc, 0x20000, …)` (`FUN_00678890` case `0x14`, line 424),
-  which may call that property's handler. A get for the wildcard fourcc `0xffffffff`
-  instead enumerates ACPd's **materialized** value list directly (same function, the
-  `local_268 == -1` branch) and calls **no** per-property handler — this is the
-  airpyrt "dump all props" path, and 80 properties come back this way.
-* **Reads used in this sweep:** the wildcard dump, plus one named `getprop` per
-  non-action property. The 31 **action** properties (type 10) were **not**
-  named-swept, because a named get would dispatch to their handler and some are
-  destructive verbs (`acRB` reboot, `acFN`, `FLSH`, `fust`/`fuca` firmware update,
-  `invr`, `ddEn`). No `setprop` was ever sent.
+| | |
+|---|---|
+| Auth | per connection: every request carries the admin password; a wrong one → `0xfffffff0` before any property is returned. No unauthenticated read |
+| Named get | `ACPGetPropertyDirect(fourcc, 0x20000, …)` (`FUN_00678890` case `0x14`); may call the property's handler |
+| Wildcard get | fourcc `0xffffffff`: dumps ACPd's materialized value list, calls no handler (airpyrt-tools' "dump all") |
+| Action properties | type 10; a named get dispatches to the handler, and some are destructive (`acRB` reboot, `acFN`, `FLSH`, `fust` / `fuca` firmware update, `invr`, `ddEn`). Not swept |
+| Multi-property `setprop` | a value whose length isn't a multiple of 4 crashes ACPd ([security.md](security.md#known-bugs)); send one property per request |
 
 ## Type codes
 
-`ACPd` tags each property with a type. proptab.py already knew most; the sweep pinned
-down the three that were unlabelled (3, 4, 11) from their live widths:
-
-| code | name | notes |
+| Code | Name | Notes |
 |---|---|---|
-| 1 | `byte` | 8-bit; also used for opaque byte buffers (`logm`, `auHK`) |
-| 2 | `string` | NUL-terminated text |
-| 3 | `int` | small integer (1 byte seen: `bjSd`) |
-| 4 | `int16` | 16-bit integer (`tmpC` temperature, `raLC`, `auRR`) |
-| 5 | `uint32` | 32-bit; the most common type (144 props) |
-| 6 | `bool` | 1 byte, 0/1 |
-| 7 | `ipv4` | 4-byte address |
-| 8 | `mac` | 6-byte hardware address |
+| 1 | `byte` | 8-bit; also opaque byte buffers (`logm`, `auHK`) |
+| 2 | `string` | NUL-terminated |
+| 3 | `int` | small integer (1 byte: `bjSd`) |
+| 4 | `int16` | `tmpC`, `raLC`, `auRR` |
+| 5 | `uint32` | most common (144 properties) |
+| 6 | `bool` | 1 byte |
+| 7 | `ipv4` | 4 bytes |
+| 8 | `mac` | 6 bytes |
 | 9 | `phys` | fixed binary struct (PHY/port info) |
-| 10 | `action` | a verb, not a value — triggered by `setprop`, not read here |
-| 11 | `fcc[]` | packed array of fourccs (`feat`, `prop`) |
-| 12 | `ipv6` | 16-byte address |
-| 13 | `data` | opaque blob; usually a `CFB0…` binary plist |
+| 10 | `action` | a verb, triggered by `setprop` |
+| 11 | `fcc[]` | packed fourcc array (`feat`, `prop`) |
+| 12 | `ipv6` | 16 bytes |
+| 13 | `data` | opaque blob, usually a `CFB0…` binary plist |
 
 ## Flags byte
 
-The flags gate **writes**, not reads (from `ACPGetPropertyDirect` /
-`ACPSetPropertyDirectEx`):
+Flags gate writes (`ACPSetPropertyDirectEx`), not reads.
 
-| bit | meaning |
+| Bit | Meaning |
 |---|---|
 | `0x04` | set needs privilege (`priv`) |
 | `0x08` | set needs auth (`auth`) |
 | `0x10` | set forces internal flag 0x10 |
 | `0x20` | set refused (read-only) |
 | `0x40` | value comes from a handler (`h40`) |
-| `0x80` | handler-only, **indexed** (`h80`) — needs an interface/radio index |
+| `0x80` | handler-only, indexed (`h80`): needs an interface/radio index |
 
-## What the sweep found
+## Read results (A1392)
 
-520 properties, one live disposition each:
+| Result | Code | Count | Notes |
+|---|---|---:|---|
+| readable | | 147 | 80 in the wildcard dump + 67 computed by a handler on named get; 149 (81) with a wired WAN |
+| absent | -10 `0xfffffff6` | 269 | no stored value in this configuration |
+| indexed | -6772 `0xffffe58c` | 65 | all `ra**` / `rCh2` (flag `0x80`): the per-radio Wi-Fi set, read through the `WiFi` blob or the `wifi.*` RPCs |
+| action | | 31 | not swept |
+| no data | -18 `0xffffffee` | 3 | `drTY`, `acEf`, `fuup` |
+| no such interface | -6711 | 2 | `raM2`, `iMTU` |
+| n/a | -6720 | 1 | `fugp` (no firmware update in progress) |
+| error | -5 | 1 | `minV` |
+| readable, slow | | 1 | `FlSu` returns `0x01`; the handler takes ~13 s (flash summary) |
 
-| disposition | count | meaning |
-|---|---:|---|
-| **readable** | 147 | 80 via the wildcard dump + 67 computed by a handler on named get |
-| **absent** (`-10`, `0xfffffff6`) | 269 | no stored value in this configuration |
-| **indexed** (`-6772`, `0xffffe58c`) | 65 | needs a radio/interface index — all are `ra**`/`rCh2` (flag `0x80`) |
-| **action** (not swept) | 31 | type-10 verbs; read deliberately skipped |
-| **no-data** (`-18`, `0xffffffee`) | 3 | `drTY`, `acEf`, `fuup` — handler had nothing to return |
-| **n/a interface** (`-6711`) | 2 | `raM2`, `iMTU` |
-| **n/a** (`-6720`) | 1 | `fugp` (no firmware update in progress) |
-| **error** (`-5`) | 1 | `minV` |
-| **readable, slow** | 1 | `FlSu` returns `0x01` but the handler takes ~13 s (a flash summary) |
+## Notable properties
 
-The big takeaways:
+| fourcc | Value / meaning |
+|---|---|
+| `prop` | all 520 fourccs (on-device copy of the table) |
+| `feat` | advertised capabilities ([below](#capabilities-feat)) |
+| `syAP` / `syAM` | product ID / model string ([models.md](models.md#platform)) |
+| `syVs` | firmware version |
+| `syBL` | bootloader banner ([boot.md](boot.md#sybl)) |
+| `syPW`, `syPR`, `syGP` | admin password, `syPR`, guest-network password: returned in **cleartext** |
+| `WiFi` | per-radio Wi-Fi config including the PMK, in cleartext ([wifi-blob.md](wifi-blob.md)) |
+| `ctim` | configuration timestamp; gates client mode ([join-mode.md](join-mode.md#ctim)) |
+| `dbug` | debug bitfield; bit `0x200` clear = SSH on ([dbug.md](dbug.md)) |
+| `LEDc` | front LED, live, no reboot: 0 auto, 1 amber, 2 / 3 green; higher values ignored |
+| `syNm` | base station name; becomes the hostname and `<name>.local` at the next boot |
+| `sySt` | posted status problems ([below](#status-problems-syst)) |
+| `waNM` | when false with NAT on, ACP and SSH are open on the WAN ([security.md](security.md#wan-side)) |
+| `logm` | the ~24 KB syslog ring buffer |
+| `drTY` | dirty-plist change set; -18 unless one is staged |
+| `tmpC` | board temperature, int16 (`0x018a` ≈ 39.4 °C) |
 
-* **The 65 `indexed` properties are the whole per-radio Wi-Fi set** (`raNm`, `raWM`,
-  `raWE`, `raSt`, `raCh`, …). A bare `getprop` can't fetch them; they're read through
-  the indexed `wifi.*` RPCs with a radio index (see [rpc-surface.md](rpc-surface.md)).
-  This — not "auth" — is what makes them look unreadable.
-* **`getprop` reads secrets back in cleartext.** `syPW` (admin password), `syPR` and
-  `syGP` (guest-network password) are all in the materialized dump. Anyone who can
-  authenticate once (or who reaches a base station still on the factory `public`) can
-  read the admin password straight back out. Same for the Wi-Fi PMK inside the `WiFi`
-  blob. (R6 security note.)
-* **`prop` and `feat` are self-describing.** `prop` (type `fcc[]`) returns all 520
-  property fourccs — an on-device copy of this table, and a clean cross-check that the
-  static table matches the running firmware exactly. `feat` returns 89 capability
-  fourccs the firmware advertises (below).
-* **`syBL` exposes the bootloader:** `Apple CFE (bcm: 1.4.2 ath: 2012-1-15 apple: a4)
-  Apr 23 2012` — the first concrete lead for the boot-chain road (R4).
-* **`logm`** hands back the ~24 KB syslog ring buffer over ACP (may contain SSIDs and
-  client IPs — kept out of this repo).
-* **`drTY`** (the dry-run/dirty-plist property, R1) is present but returns `-18` (no
-  data) unless a change set is staged.
+### Capabilities (`feat`)
 
-### The 89 advertised capabilities (`feat`)
+A1392 / 7.8.1, 89 entries (per-model differences: [models.md](models.md#acp-and-access)):
 
 ```
 SAcC DMes NAOL NoMW AChS SDuW MCRt AltD AltI WPA- AES- SysL NTP- Prof BSTA
@@ -116,14 +99,23 @@ TSN- ChUp dwNC liIP ip6F 6trd 6sec pSTA WPAu SCoW wiPL GstN DHRn drTY GNAs
 grWD sbDB rsPr iEAP minR minr !mta bsps ptxt rbjr aclo GNEx IGCR iCLD
 ```
 
-Recognisable ones: `WPA-`/`AES-`/`WPAu`/`WPAW` (Wi-Fi security), `802a`/`802n`
-(radio modes), `USB-`/`prni` (USB printer sharing), `ip6*`/`6dhc`/`6sec` (IPv6),
-`WSC-` (WPS), `GstN`/`GNEx` (guest network), `LEDI`/`LEDC` (LED), `UsDb` (the `dbug`
-switch), `RTCl` (clock), `WDS-`/`DWDS` (WDS bridging), `drTY` (dry-run), `NTP-`.
+| Group | Codes |
+|---|---|
+| Wi-Fi security | `WPA-` `AES-` `WPAu` `WPAW` |
+| Radio modes | `802a` `802n` |
+| USB printer sharing | `USB-` `prni` |
+| IPv6 | `ip6*` `6dhc` `6sec` |
+| WPS | `WSC-` |
+| Guest network | `GstN` `GNEx` |
+| LED | `LEDI` `LEDC` |
+| `dbug` switch | `UsDb` |
+| Clock | `RTCl` |
+| WDS | `WDS-` `DWDS` |
+| Other | `drTY` (dry run), `NTP-` |
 
-### Example readable values (one stock A1392, identifiers and secrets withheld)
+### Example values (A1392, factory settings)
 
-| fourcc | value |
+| fourcc | Value |
 |---|---|
 | `syVs` / `syVr` | `7.8.1` / `f0` |
 | `syAM` / `syAP` | `AirPort10,115` / `115` |
@@ -131,78 +123,65 @@ switch), `RTCl` (clock), `WDS-`/`DWDS` (WDS bridging), `drTY` (dry-run), `NTP-`.
 | `syBL` | `Apple CFE (bcm: 1.4.2 ath: 2012-1-15 apple: a4) Apr 23 2012` |
 | `card` | `Atheros 802.11; driver 4.0.27.6; mac 768.3; phy 2457.9` |
 | `ssSK` / `sySK` / `syRe` | `ETSI` / `3` / `8` |
-| `dbug` | `0x3000` (SSH on; see dbug.md) |
 | `LEDc` / `isAC` | `0` (auto) / `true` (on AC power) |
-| `tmpC` | `0x018a` (≈ 39.4 °C board temperature) |
 | `maAl` / `maPr` | `500` / `5` |
 | `ntSV` | `time.apple.com` |
-| `laIP` / `laSM` | `10.0.1.1` / `255.255.255.0` (factory default) |
-| `dhBg`–`dhEn` / `dhLe` | `10.0.1.2`–`10.0.1.200` / `86400 s` (default DHCP scope) |
-| `gnBg` | `172.16.42.2` (default guest scope) |
+| `laIP` / `laSM` | `10.0.1.1` / `255.255.255.0` |
+| `dhBg`–`dhEn` / `dhLe` | `10.0.1.2`–`10.0.1.200` / `86400` s |
+| `gnBg` | `172.16.42.2` (guest scope) |
 | `syFl` / `seFl` / `nvVs` | `0x80ac` / `0x10000` / `0x20001` |
 
-Withheld from the repo (present but device-identifying or secret): `syNm` (default
-name embeds the MAC), `sySN` (serial), `raMA`/`waMA`/`laMA` (MACs), `6Wad` (IPv6
-embedding the MAC), `WiFi`/`raWE` (SSID + PMK), `raSR` (neighbour SSIDs), `logm`
-(syslog), `auHK` (AirPlay host key), `syPW`/`syPR`/`syGP` (passwords). The full
-unsanitised sweep is kept outside the repo (`rpc_live/2026-09-24-props/`).
+Device-identifying or secret, not reproduced: `syNm` (default embeds the MAC), `sySN`,
+`raMA` / `waMA` / `laMA`, `6Wad`, `WiFi` / `raWE`, `raSR` (neighbour SSIDs), `logm`, `auHK`
+(AirPlay host key), `syPW` / `syPR` / `syGP`.
 
-### With a wired WAN uplink (2026-09-28)
+### Wired WAN vs unplugged (A1392, NAT)
 
-Same read-only sweep, WAN port cabled to a home router (NAT role, DHCP lease on the WAN):
-149 readable (81 in the wildcard dump). Differences from the table below, which was taken
-with the WAN unplugged:
-
-| fourcc | no WAN | wired WAN |
+| fourcc | WAN unplugged | Wired WAN with a DHCP lease |
 |---|---|---|
-| `waCD` | absent | `lan` (DHCP domain name, option 15) |
-| `waIP` / `waSM` / `waRA` / `waC1` | `169.254.x` / `/16` / `0.0.0.0` / `0.0.0.0` | lease address / `/24` / router / DNS server |
-| `waIS` | `0x0` | `0x302` (WAN interface state bits) |
-| `waDI` | empty `leases` | the dhclient lease: server id, dns, domainName, fixedAddress, routers, leaseTime, renew/rebind/expire times |
-| `rteI` | `{IPv4: 0.0.0.0}` | `{IPv4: <router>}` |
-| `WLnk` / `PHYS` | `0` / port down | `4` / port 100 Mbit/s full duplex |
-| `time` | seconds since boot | real Unix time (`sntpd -client=time.apple.com` set the clock) |
-| `sySt` | `waCF`, `waNI`, `nDNS` | `waCF`, `DubN` |
+| `waCD` | absent | DHCP domain name (option 15) |
+| `waIP` / `waSM` | `169.254.x` / `/16` | lease address / `/24` |
+| `waRA` / `waC1` | `0.0.0.0` / `0.0.0.0` | router / DNS server |
+| `waLL` | `169.254.x` | `169.254.x` (`/sbin/link_local eth0` keeps a link-local alias) |
 
-`waLL` keeps the `169.254.x` address even with a lease: `/sbin/link_local eth0` always holds
-an IPv4 link-local alias on the WAN port.
+## Status problems (`sySt`)
 
-### Status problems (`sySt`)
+`sySt` and the `prob=` key of the `_airport._tcp` mDNS TXT record list the posted problems.
+Posted / cleared by fourcc: `ACPPostProblemDirect` (`FUN_006752c8`) /
+`ACPClearProblemDirect` (`FUN_0067504c`). Table at VMA `0xc5ade0`, 8-byte records (fourcc +
+two flag bytes, `anyP` last); flag meaning unknown (accessors `FUN_00807a10` / `FUN_00807a44`
+have no callers).
 
-`sySt` (and the `prob=` key of the `_airport._tcp` mDNS TXT record) lists the posted
-problems. ACPd posts and clears them by fourcc (`ACPPostProblemDirect` `FUN_006752c8` /
-`ACPClearProblemDirect` `FUN_0067504c`). The fourcc list is a table at VMA `0xc5ade0`:
-8-byte records, fourcc + two flag bytes, `anyP` last. Flags `01 00`: `waNL waNI raNN wdsP ppNS
-ppBP rdNS usbp fsck Ifsc fslo Ifsl unsD waRj waRg ctim DubN wbAu bsWD upAv nDNS timz dMCR
-iCPW oTMP 6gdn 6rdn 6rEr`. Flags `00 00`: `unkn wscJ mgrt mgEr SSdF soft wiDM TaIP raHN`.
-Flags `01 01`: `waSN waCF opNW pubP`. What the flag bytes mean is not established; the
-accessors `FUN_00807a10`/`FUN_00807a44` have no callers.
+| Flags | Codes |
+|---|---|
+| `01 00` | `waNL waNI raNN wdsP ppNS ppBP rdNS usbp fsck Ifsc fslo Ifsl unsD waRj waRg ctim DubN wbAu bsWD upAv nDNS timz dMCR iCPW oTMP 6gdn 6rdn 6rEr` |
+| `00 00` | `unkn wscJ mgrt mgEr SSdF soft wiDM TaIP raHN` |
+| `01 01` | `waSN waCF opNW pubP` |
 
-The ones that decide the LED on a plain NAT setup are all local state checks, **not**
-Internet reachability probes:
+Codes that set the LED amber on a plain NAT setup (local checks, not Internet reachability):
 
-| code | posted when | source |
+| Code | Posted when | Source |
 |---|---|---|
-| `waNI` | the WAN IPv4 address is not usable (`0/8`, `127/8`, `169.254/16`) | `FUN_0065c590` + `FUN_0085e468` |
-| `DubN` | NAT on (`raNA`) **and** the WAN address is private (RFC 1918) — "double NAT" | `FUN_0065c590`, `FUN_0065f010` + `FUN_0085e360` |
-| `nDNS` | no IPv4 and no IPv6 DNS servers configured | `FUN_00664820` (writes `/etc/dns/manual-nameservers` otherwise) |
-| `waCF` | at boot, NAT on and `waNM` false: setup over the WAN is open (see [security.md](security.md#wan-side-live-wired-uplink)) | `FUN_0065746c`; same byte gates the WAN pf rules in `FUN_0065e958` |
-| `waNL` | the WAN Ethernet port has no link | observed (not decompiled) |
-| `pubP` | the admin password is still `public` | observed: gone after the password change (not decompiled) |
+| `waNI` | WAN IPv4 address not usable (`0/8`, `127/8`, `169.254/16`) | `FUN_0065c590` + `FUN_0085e468` |
+| `DubN` | NAT on (`raNA`) and the WAN address is private (RFC 1918): double NAT | `FUN_0065c590`, `FUN_0065f010` + `FUN_0085e360` |
+| `nDNS` | no IPv4 and no IPv6 DNS servers | `FUN_00664820` |
+| `waCF` | at boot, NAT on and `waNM` false: setup over the WAN is open ([security.md](security.md#wan-side)) | `FUN_0065746c` |
+| `waNL` | WAN Ethernet port has no link | L |
+| `pubP` | admin password is still `public` | L |
+| `ctim` | configuration timestamp unset | `FUN_00659910` |
+| `soft` | soft-reset mode active | `FUN_00677578` |
 
-So a unit cabled behind a home router in NAT mode blinks amber on `DubN` + `waCF` even though
-its uplink works. Bridge mode (NAT off) clears both. Tested 2026-09-28: `airportctl mode
-sharing bridge` + reboot → role 4, `sySt` `problems = []`, no `prob=` key in the mDNS TXT record,
-LED solid green on auto (`LEDc=0`). The unit then takes its address from the upstream DHCP
-server (`laIP` = `waIP`), and hosts on its LAN port and Wi-Fi share the upstream subnet.
+| Setup | Result (L) |
+|---|---|
+| NAT behind a home router | amber blinking on `DubN` + `waCF`, uplink working |
+| Bridge mode (`mode sharing bridge`) | role 4, no problems, no `prob=` key, LED green on auto; `laIP` = `waIP` from the upstream DHCP server |
 
-## The full dictionary
+## Dictionary
 
-Order matches the on-device table. `disposition` is what a read returned on
-2026-09-24; `note` is the meaning where confirmed from the value or inferred from the
-fourcc family (radio `ra**`, WAN `wa**`, LAN `la**`, DHCP `dh**`, guest `gn**`, IPv6
-`6***`, AirPlay `au**`, USB/printer `USB*`/`prn*`, action `ac**`). Blank means
-undetermined.
+Order as on the device. `disposition` = read result on the A1392 (WAN unplugged). `note` =
+meaning, confirmed from the value or inferred from the family (`ra**` radio, `wa**` WAN,
+`la**` LAN, `dh**` DHCP, `gn**` guest, `6***` IPv6, `au**` AirPlay, `USB*`/`prn*` USB/printer,
+`ac**` action). Blank = unknown.
 
 | # | fourcc | type | flags | disposition | note |
 |---:|--------|------|-------|-------------|------|

@@ -1,14 +1,13 @@
 # docs/images
 
-Board photos and figures referenced by the docs (see [hardware.md](../hardware.md)).
+Board photos for [hardware.md](../hardware.md). Wanted:
 
-Naming used by `hardware.md` (drop files here, then uncomment the matching
-`<!-- ![…](images/…) -->` line in that page):
+| File | Shot |
+|---|---|
+| `debug-header.jpg` | macro of the serial/JTAG header by the audio jack, pads sharp (pinout) |
+| `flash-chip.jpg` | the SPI-NOR marking and the shield anchor over it |
+| `board-top.jpg` | logic board, top, RF shields removed, chips legible |
+| `board-bottom.jpg` | logic board, underside |
+| `case-open.jpg` | unit with the bottom panel off |
 
-- `debug-header.jpg` — macro of the serial/JTAG header by the audio jack (pinout)
-- `flash-chip.jpg` — macro of the SPI-NOR (W25Q128BV) marking and the shield anchor over it
-- `board-top.jpg` — logic board, top, RF shields removed
-- `board-bottom.jpg` — logic board, underside
-- `case-open.jpg` — unit with the bottom panel off
-
-Keep the long edge around 2000 px and each file under ~2 MB.
+Long edge ~2000 px, each file under ~2 MB.

@@ -1,15 +1,13 @@
 # Replacement wpa_supplicant for the AirPort Express (minimal WPA2-PSK)
 
-The stock firmware's `/sbin/wpa_supplicant` (Apple's crunched 0.6.5) segfaults at startup,
-so client / "join a wireless network" mode can't work from configuration. The kernel's
-station datapath is fine, so we run our own supplicant instead. This directory builds one.
+Stock wpa_supplicant 0.7.3 for the A1392, replacing the firmware's 0.6.5, which segfaults
+at startup ([join-mode.md](../../docs/join-mode.md#firmware-supplicant)).
 
-**Status: works on hardware (2026-09-23).** On a managed vap on `ath0` it scans, associates,
-completes the WPA2-PSK 4-way handshake with a third-party AP (an ISP router), installs
-PTK+GTK (CCMP), and carries traffic both ways: Express -> gateway 0% loss, Express -> 1.1.1.1
-4/4 at ~21 ms, and a LAN laptop -> the Express's Wi-Fi address. The current ~295 KB build
-(raw-BPF EAPOL, below) was re-verified with `join-test.sh` on 2026-09-25: joined, pinged,
-and AirPlay was advertised and played over the joined network.
+| | |
+|---|---|
+| Status (L) | on a managed VAP on `ath0`: scan, association, WPA2-PSK 4-way handshake with a third-party router, PTK + GTK (CCMP), traffic both ways, AirPlay advertised and played on the joined network |
+| Binary | static NetBSD 4.0 mipseb, 295,236 bytes stripped |
+| Source | upstream 0.7.3, unmodified; shims in `compat/` |
 
 ## Build
 
@@ -33,17 +31,12 @@ wpa_supplicant-0.7.3/wpa_supplicant/wpa_supplicant.dbg   unstripped, with symbol
 
 `WPA_BIN=path` uploads a different binary (e.g. an older build) instead of the one built here.
 
-It takes the 2.4 GHz radio (ACPd is frozen only for the takeover, then resumed), joins,
-pings, and restarts `airtunesd -i wlan2` so AirPlay is advertised and served on the joined
-network. The 5 GHz AP stays up. It takes ~70 s. Nothing persists: `/sbin/reboot` on the Express
-restores the stock setup, and no stored configuration is touched.
-
-Two things to know when changing it:
-- **Start the supplicant with the interface down.** 0.7.3's `driver_bsd` downs the interface
-  during init, then reads its own `RTM_IFINFO` (IFF_UP clear) as "interface removed" and drops
-  its EAPOL socket. It then associates but never hears 4-way message 1/4. So the harness
-  assigns the address, runs `ifconfig wlan2 down`, and then starts the supplicant.
-- **airtunesd only registers `_raop`/`_airplay` on its `-i` interface** (default `bridge0`).
+RAM-only test harness with a fixed address, ~70 s: takes the 2.4 GHz radio (ACPd frozen only
+for the takeover), joins, pings, restarts `airtunesd -i wlan2`; the 5 GHz AP stays up.
+`/sbin/reboot` on the Express restores the stock setup; no stored configuration is touched.
+The persistent, DHCP-capable path is `airportctl join`. Sequence and the two ordering rules
+(supplicant started with the interface down; `airtunesd -i`):
+[join-mode.md § Join sequence](../../docs/join-mode.md#join-sequence).
 
 ## Why 0.7.3, and the kernel ABI
 

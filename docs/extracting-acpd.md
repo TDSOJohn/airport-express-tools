@@ -1,36 +1,24 @@
-# Getting `ACPd` off your own base station (and into Ghidra)
+# Getting `ACPd`
 
-Everything in `docs/` is a description of Apple's `/sbin/ACPd`. **The binary itself is Apple's
-copyrighted firmware and is not distributed with this repo.** You extract it from a base station
-you own; that is also the only way to be sure the addresses match *your* firmware version.
+`/sbin/ACPd` is Apple's and is not in this repo. Two ways to get your own copy:
 
-Reference build for all the addresses in these documents: **A1392 (AirPort Express 802.11n,
-2nd gen), firmware 7.8.1**, `ELF 32-bit MSB, MIPS-I, statically linked, stripped`, image base
-`0x00400000`, ~10 MB (the whole userland is one crunched binary).
+| Source | Needs | How |
+|---|---|---|
+| Firmware image | the model's AES key ([models.md](models.md#firmware-images)) | `tools/decrypt_basebinary.py X.basebinary X.img && tools/ufs1.py X.img cat /sbin/ACPd > ACPd.bin` ([firmware.md](firmware.md#tools)) |
+| A unit | the debug SSH login ([below](#enable-ssh)) | `tools/essh.sh 'cat /sbin/ACPd' > ACPd.bin` |
 
-## 1. Reach the base station
+Both give the same file (checked on `syAP` 115 / 7.8.1 and 108 / 7.6.9).
 
-Ethernet from your machine into the Express's **LAN** port (the `‹•••›` icon), and a wired
-profile that never takes the default route, so your internet stays where it is:
+| Build | Bytes | SHA-256 | Format |
+|---|---:|---|---|
+| `syAP` 115, 7.8.1 (the [reference build](README.md#conventions)) | 10 295 088 | `f7730dab1c0016ee5fde7376ec439021410371504ca654a8f8e4211fd27b38be` | ELF 32-bit MSB, MIPS-I, static, stripped, NetBSD 4.0; image base `0x00400000` |
 
-```sh
-nmcli connection add type ethernet con-name airport-probe ifname <your-iface> \
-  connection.autoconnect no \
-  ipv4.method auto ipv4.never-default yes ipv4.ignore-auto-dns yes \
-  ipv4.ignore-auto-routes yes ipv4.route-metric 2000 ipv6.method ignore
-nmcli connection up airport-probe
-```
+`/sbin/ACPd` is the crunched megabinary: the whole userland in one file.
 
-In its factory router mode the Express is `10.0.1.1` and hands you `10.0.1.2`. If it is bridged
-instead, `python3 tools/find_express.py` sweeps the subnet and the ARP table for Apple's
-`20:c9:d0` OUI.
+## Enable SSH
 
-## 2. Enable the debug shell
-
-ACPd starts `sshd` (root login, admin password) whenever the `dbug` property has bit
-`0x200` **clear**. `0x3000` is the value the community uses; it works because `0x3000 &
-0x200 == 0` (the `0x1000`/`0x2000` bits themselves only suppress iperf — see
-[dbug](dbug.md) for the full bitfield):
+Connect to the LAN port ([README § Install](../README.md#install--run)), then set `dbug` to a
+value with bit `0x200` clear ([dbug.md](dbug.md)) and reboot:
 
 ```sh
 python3 - <<'EOF'
@@ -39,74 +27,54 @@ from airportctl import acp
 acp.set_props('10.0.1.1', 'public', [('dbug', struct.pack('>I', 0x3000))])
 acp.reboot('10.0.1.1', 'public')
 EOF
-```
-
-`public` is the factory admin password; use yours. After the reboot:
-
-```sh
 AIRPORT_PW=public tools/essh.sh 'uname -a'
 ```
 
-`essh.sh` re-enables the legacy KEX/ciphers that OpenSSH now refuses by default — the Express
-runs a 2007-era SSH server. **Turn the shell back off when you are done** — set `dbug` to a
-value with bit `0x200` *set* and reboot (e.g. `0x3200`). Note `dbug = 0` does **not** turn SSH
-off: `0` also leaves `0x200` clear, so `sshd` keeps running (and iperf comes back).
+`public` = factory admin password; use yours. To turn SSH off: a value with `0x200` set
+(e.g. `0x3200`) and reboot; `0` keeps SSH on.
 
-## 3. Copy the binary out
+| `tools/essh.sh` | |
+|---|---|
+| Password | `$AIRPORT_PW`, else the first line of `$AIRPORT_PW_FILE` (default `~/.config/airport-express/admin-pw`), else `public` |
+| Host | `$AIRPORT_HOST` (default `10.0.1.1`) |
+| Known hosts | `tools/.airport_known_hosts` |
+| Algorithms | re-enables the legacy KEX / host-key / ciphers OpenSSH 4.4 needs |
+| Binary output | stdout is 8-bit clean (no tty for a remote command); fallback `uuencode /sbin/ACPd -` |
 
-There is no `scp` on the device, so stream it over the shell (ssh does not allocate a tty for a
-remote command, so stdout stays 8-bit clean):
+Device shell: no `grep`, `head`, `id` or `scp`; `/sbin` is not in `PATH`.
 
-```sh
-AIRPORT_PW=public tools/essh.sh 'cat /sbin/ACPd' > ACPd.bin
-file ACPd.bin       # ELF 32-bit MSB executable, MIPS, MIPS-I, statically linked, for NetBSD 4.0
-sha256sum ACPd.bin
-```
+## Ghidra
 
-If anything mangles it, go through base64 instead: `tools/essh.sh 'uuencode /sbin/ACPd -'`, or
-copy it to `/mnt/Memory` first with `crossdev/run.sh`'s technique in reverse.
-
-The build these documents describe is **10 295 088 bytes**,
-`f7730dab1c0016ee5fde7376ec439021410371504ca654a8f8e4211fd27b38be`. A different hash means a
-different firmware and the addresses below will have moved.
-
-Two device quirks that will bite you: `/sbin` is not in the device's `PATH`, and there is no
-`grep`, `head` or `id` — filter output on your laptop.
-
-## 4. Import into Ghidra
-
-Any recent Ghidra; 12.1.3 on OpenJDK 21 is what these scripts were run with. Language
-**MIPS:BE:32:default**, image base **0x00400000**, then a full auto-analysis (~18 600 functions;
-it takes a while and a few GB of RAM).
+| | |
+|---|---|
+| Version | Ghidra 12.1.3 on OpenJDK 21 |
+| Language | `MIPS:BE:32:default`, image base `0x00400000` |
+| Analysis | full auto-analysis, ~18 600 functions, a few GB of RAM |
+| File offsets | `strings -t x` prints file offsets: VMA = offset + `0x400000` |
 
 ```sh
 /path/to/ghidra/support/analyzeHeadless "$PWD/ghidra_project" acpd \
   -import ACPd.bin -processor MIPS:BE:32:default
-```
-
-## 5. Get the function names back
-
-The single highest-value step. ACPd passes its own function names to its lock/log wrappers as
-`__func__` strings, so ~2310 functions can be re-identified automatically:
-
-```sh
 /path/to/ghidra/support/analyzeHeadless "$PWD/ghidra_project" acpd \
   -process ACPd.bin -readOnly -noanalysis \
   -scriptPath "$PWD/ghidra_scripts" -postScript NameFuncs.java func_names.txt
 ```
 
-You get `ACPGetPropertyDirect`, `ACPSetPropertyDirectEx`, `ACPPostProblemDirect`,
-`ACPClearProblemDirect`, `ACPPropertyHandlerInstallDirect`, `ACPCloud_*`, … which is enough to
-navigate the rest.
+`NameFuncs.java` recovers ~2310 function names from the `__func__` strings ACPd passes to its
+lock/log wrappers (`ACPGetPropertyDirect`, `ACPSetPropertyDirectEx`, `ACPPostProblemDirect`,
+`ACPClearProblemDirect`, `ACPPropertyHandlerInstallDirect`, `ACPCloud_*`, …). Other scripts:
+[ghidra_scripts](../ghidra_scripts/README.md).
 
-## 6. Useful anchors
+## Anchors
 
-| what | how to find it |
+For re-finding the addresses in these docs on another build.
+
+| Target | Find with |
 |---|---|
-| ACP property table | `FUN_00807418` (the lookup); table at VMA `0xc5af38`, 12-byte records, zero-terminated. `python3 tools/proptab.py ACPd.bin` |
-| the join gate | `ImmScan.java 0x6374696d` (the `ctim` fourcc) |
-| wpa_supplicant spawn | `FindStr.java '/sbin/wpa_supplicant'` then `Xrefs.java` on the hit |
+| ACP property table | `python3 tools/proptab.py ACPd.bin`; lookup `FUN_00807418`, table `0xc5af38` |
+| Client-mode gate | `ImmScan.java 0x6374696d` (`ctim`) |
+| wpa_supplicant spawn | `FindStr.java '/sbin/wpa_supplicant -K -M %s -F %s -D net80211 -i %s -c %s'`, then `Xrefs.java` |
 | hostapd config writer | `FindStr.java 'wpa_psk'` / `'rsn_pairwise'` |
-| the WiFi blob | `ImmScan.java 0x57694669` (`'WiFi'`) |
-
-Note `strings -t x` prints **file** offsets: VMA = file offset + `0x400000`.
+| `WiFi` blob | `ImmScan.java 0x57694669` (`WiFi`) |
+| `dbug` consumers | `ImmScan.java 0x64627567` (`dbug`) |
+| RPC registrars | `RpcMap.java 0x6717dc`, `RpcMap.java 0x80b058` |

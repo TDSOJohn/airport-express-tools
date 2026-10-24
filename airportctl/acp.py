@@ -139,6 +139,28 @@ def _set_one(host, password, n, v, timeout):
     return failures
 
 
+# What identifies a base station: name, product ID, firmware, uptime, Wi-Fi chipset+driver.
+DEVICE_PROPS = ['syNm', 'syAP', 'syVs', 'syUT', 'card']
+
+
+def read_device(host, password):
+    """DEVICE_PROPS as a dict (ints for syAP/syUT, else text); properties the device doesn't
+    return are left out."""
+    err, got = get_props(host, password, DEVICE_PROPS)
+    if err:
+        hint = ' (wrong admin password)' if err == ERR_WRONG_PASSWORD else ''
+        raise RuntimeError(f'getprop failed: ACP error 0x{err:08x}{hint}')
+    dev = {}
+    for name, flags, data in got:
+        if flags & 1:
+            continue
+        if name in ('syAP', 'syUT'):
+            dev[name] = int.from_bytes(data[:4], 'big')
+        else:
+            dev[name] = data.rstrip(b'\0').decode('utf-8', 'replace').rstrip('\r\n')
+    return dev
+
+
 def get_name(host, password):
     """The base station name (syNm)."""
     return get_raw(host, password, 'syNm').rstrip(b'\0').decode('utf-8', 'replace')

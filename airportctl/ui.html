@@ -312,7 +312,7 @@ function render() {
   ub.hidden = !(d && !d.tested);
   ub.replaceChildren();
   if (d && !d.tested) ub.append(h('span', {}, 'This model/firmware (', d.product + ' / ' + d.firmware,
-    ') has not been tested. Reads are safe; writes are backed up first. ',
+    ') has not been tested. Reads are safe; writes are refused here. To write anyway, use the command line with --untested. ',
     h('a', { href: d.report_url, target: '_blank', rel: 'noopener' }, 'Report what works')));
 
   if (document.activeElement !== $('conn-host')) $('conn-host').value = s.host || '';

@@ -6,7 +6,7 @@ import pprint
 import struct
 import sys
 
-from . import acp, discover, mode as modemod, props, rpc as rpcmod
+from . import acp, discover, mode as modemod, models, props, rpc as rpcmod
 from . import wifi as wifimod
 
 
@@ -76,9 +76,10 @@ def cmd_wifi_join(args):
     secret = args.wifi_password
     wifi, _ = wifimod.load(args.host, args.password)
     rs = wifimod.radios(wifi)
-    join_idx = {'2.4': 0, '5': 1}[args.band]
-    if join_idx >= len(rs):
-        raise SystemExit(f'--band {args.band} maps to radio {join_idx}, which does not exist')
+    on_band = [i for i, r in enumerate(rs) if wifimod.band(i, r) == args.band]
+    if not on_band:
+        raise SystemExit(f'--band {args.band}: no radio on that band')
+    join_idx = on_band[0]
     lines = []
     try:
         gate, _ = modemod.read_gate(args.host, args.password)
@@ -102,7 +103,7 @@ def cmd_wifi_join(args):
     for i, r in enumerate(rs):
         if i == join_idx:
             wifimod.join(r, args.ssid, secret, mode=args.security, psta=args.psta)
-            lines.append(f'radio {i} ({"2.4" if i == 0 else "5"} GHz): JOIN {args.ssid!r}  '
+            lines.append(f'radio {i} ({wifimod.band(i, r)} GHz): JOIN {args.ssid!r}  '
                          f'{args.security}  raSt=1 pSTA={args.psta} dWDS=False')
         else:
             wifimod.set_station(r, 'off')
@@ -214,7 +215,8 @@ def cmd_rpc(args):
             mark = ' ' if name in rpcmod.READ_ONLY else '*'
             print(f'{mark} {rpcmod.describe(name)}')
         print('\n* = not verified read-only: may act or change state. `.<if>` = one per '
-              'interface (e.g. wlan1). See docs/rpc-surface.md.')
+              'interface (e.g. wlan1). See docs/rpc-surface.md.\nRead-only was verified on '
+              f'{models.tested_list()}; on anything else every RPC needs --force.')
         return
     if not args.name:
         raise SystemExit('rpc: give an RPC name, or --list')
@@ -236,61 +238,78 @@ def cmd_rpc(args):
     if args.dry_run:
         print('dry run, nothing sent')
         return
+    if key in rpcmod.READ_ONLY and not args.force:
+        # READ_ONLY comes from one model's decompiled handlers, and the RPC surface differs
+        # between models (the proxy-STA RPCs are A1392-only), so it holds on tested ones only.
+        dev = acp.read_device(args.host, args.password)
+        if not is_tested(dev):
+            raise SystemExit(f'refusing: {args.name} was verified read-only on '
+                             f'{models.tested_list()} only, and this is {describe_device(dev)}. '
+                             'Re-run with --force to call it anyway.')
     print(pprint.pformat(acp.rpc(args.host, args.password, args.name, inputs)))
 
 
-DEVICE_PROPS = ['syNm', 'syAP', 'syVs', 'syUT']
 REPORT_URL = 'https://github.com/TDSOJohn/airport-express-tools/issues/new?template=device-report.yml'
 
 
-def read_device(host, password):
-    """syNm/syAP/syVs/syUT as a dict; properties the device doesn't return are left out."""
-    err, got = acp.get_props(host, password, DEVICE_PROPS)
-    if err:
-        hint = ' (wrong admin password)' if err == acp.ERR_WRONG_PASSWORD else ''
-        raise RuntimeError(f'getprop failed: ACP error 0x{err:08x}{hint}')
-    dev = {}
-    for name, flags, data in got:
-        if flags & 1:
-            continue
-        if name in ('syAP', 'syUT'):
-            dev[name] = int.from_bytes(data[:4], 'big')
-        else:
-            dev[name] = data.rstrip(b'\0').decode('utf-8', 'replace')
-    return dev
-
-
 def is_tested(dev):
-    return (dev.get('syAP'), dev.get('syVs')) in props.TESTED
+    return models.is_tested(dev.get('syAP'), dev.get('syVs'))
+
+
+def describe_device(dev):
+    """'syAP=108 (AirPort Extreme (Simultaneous Dual-Band), A1301), firmware 7.8.1'"""
+    return (f"syAP={dev.get('syAP', '?')} ({models.label(dev.get('syAP'))}), "
+            f"firmware {dev.get('syVs', '?')}")
 
 
 def cmd_info(args):
-    dev = read_device(args.host, args.password)
+    from . import join
+    dev = acp.read_device(args.host, args.password)
     ap = dev.get('syAP')
+    m = models.get(ap)
     print(f"name:     {dev.get('syNm', '?')}")
-    print(f"model:    syAP={ap if ap is not None else '?'}  ({props.product_label(ap)})")
+    print(f"model:    syAP={ap if ap is not None else '?'}  ({models.label(ap)}"
+          + (f', codename {m.codename})' if m else ')'))
     print(f"firmware: syVs={dev.get('syVs', '?')}")
     if 'syUT' in dev:
         print(f"uptime:   {datetime.timedelta(seconds=dev['syUT'])}")
+    print(f"wi-fi:    {dev.get('card', '?')}")
+    print(f"cpu:      {(m and m.arch) or 'not checked for this model yet'}")
     if is_tested(dev):
         print('status:   tested - everything in the README applies')
     else:
-        print('status:   NOT tested - reads are safe; check `wifi show` and `mode show` make sense\n'
-              '          before writing, and keep the backups. Please report what works:\n'
-              f'          {REPORT_URL}')
-
-
-def warn_if_untested(args):
-    """Before a write: print a warning on an untested model/firmware. Never blocks."""
+        print('status:   NOT tested - reads are safe; writes are refused unless you pass\n'
+              '          --untested (check `wifi show` and `mode show` make sense first, and keep\n'
+              f'          the backups). Please report what works: {REPORT_URL}')
     try:
-        dev = read_device(args.host, args.password)
-    except (RuntimeError, ValueError, OSError):
-        return  # the command itself will report the real problem
-    if not is_tested(dev):
-        print(f"!! untested device: syAP={dev.get('syAP')} ({props.product_label(dev.get('syAP'))}), "
-              f"firmware {dev.get('syVs')}. airportctl was verified on syAP=115 / 7.8.1 only.\n"
-              '   Every Wi-Fi write is backed up first; see "If something goes wrong" in the README.',
-              file=sys.stderr)
+        ok, why = join.support(dev)
+    except (RuntimeError, OSError) as e:    # a broken payload/ directory
+        ok, why = None, f'cannot tell ({e})'
+    print('join:     ' + {True: 'possible (needs the debug SSH login): ',
+                          None: 'maybe: ', False: 'not on this model: '}[ok] + why)
+
+
+def require_tested(args):
+    """Before a write: refuse on a model/firmware combination nobody has verified, unless
+    --untested. Fails closed: a device that can't be identified counts as untested."""
+    untested = getattr(args, 'untested', False)
+    try:
+        dev = acp.read_device(args.host, args.password)
+    except (RuntimeError, ValueError, OSError) as e:
+        if untested:
+            return  # the command itself will report the real problem
+        raise SystemExit(f'refusing to write: could not identify the base station ({e}). '
+                         'Writes need a model/firmware airportctl was verified on, or --untested.')
+    if is_tested(dev):
+        return
+    what = (f'untested device: {describe_device(dev)}. airportctl was verified on '
+            f'{models.tested_list()} only.')
+    if not untested:
+        raise SystemExit(f'refusing to write: {what} Reads are safe (`info`, `wifi show`, '
+                         '`mode show`). To write anyway, re-run with --untested; every Wi-Fi '
+                         f'write is backed up first. Please report what happens: {REPORT_URL}')
+    print(f'!! {what}\n   Every Wi-Fi write is backed up first; see "If something goes wrong" in '
+          'the README.', file=sys.stderr)
 
 
 def cmd_reboot(args):
@@ -449,6 +468,13 @@ def _add_write_flags(sp):
     sp.add_argument('--no-backup', action='store_true', help='skip the pre-write blob backup')
 
 
+def _writer(sp, func, **defaults):
+    """A command that writes to the base station: refused on an untested model/firmware."""
+    sp.add_argument('--untested', action='store_true',
+                    help='write even though this model/firmware is not verified (see `info`)')
+    sp.set_defaults(func=func, writes=True, **defaults)
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog='airportctl',
@@ -473,14 +499,14 @@ def build_parser():
     sp.add_argument('--wifi-password', metavar='PW|@FILE',
                     help='if WPA is set, re-derive the PMK for the new SSID (else it breaks)')
     _add_write_flags(sp)
-    sp.set_defaults(func=cmd_wifi_ssid, writes=True)
+    _writer(sp, cmd_wifi_ssid)
 
     sp = wsub.add_parser('secure', help='set security (raWM + raWE)')
     sp.add_argument('mode', choices=['open', 'wep', 'wpa', 'wpa2', 'mixed'])
     sp.add_argument('secret', nargs='?',
                     help='Wi-Fi password (WPA family; @FILE ok) or hex key (wep); omit for open')
     _add_write_flags(sp)
-    sp.set_defaults(func=cmd_wifi_secure, writes=True)
+    _writer(sp, cmd_wifi_secure)
 
     sp = wsub.add_parser('join', help="EXPERIMENTAL: the firmware's own client mode (raSt=1); "
                                       "doesn't connect on 7.8.1, use `airportctl join`")
@@ -488,7 +514,7 @@ def build_parser():
     sp.add_argument('--wifi-password', required=True, metavar='PW|@FILE',
                     help='the target network password (@FILE keeps it out of shell history)')
     sp.add_argument('--band', choices=['2.4', '5'], default='2.4',
-                    help='which radio joins (2.4=radio0, 5=radio1; default 2.4, more robust)')
+                    help='which radio joins, picked by its channel (default 2.4, more robust)')
     sp.add_argument('--security', choices=['wpa2', 'mixed', 'wpa', 'open'], default='wpa2',
                     help='target network security (default wpa2)')
     sp.add_argument('--psta', action='store_true',
@@ -498,12 +524,12 @@ def build_parser():
     sp.add_argument('--dry-run', action='store_true', help='show the change without writing')
     sp.add_argument('--reboot', action='store_true', help='reboot to apply (required to take effect)')
     sp.add_argument('--no-backup', action='store_true', help='skip the pre-write blob backup')
-    sp.set_defaults(func=cmd_wifi_join, radio=None, writes=True)
+    _writer(sp, cmd_wifi_join, radio=None)
 
     sp = wsub.add_parser('hidden', help='hide/show the SSID (raCl)')
     sp.add_argument('state', choices=['on', 'off'])
     _add_write_flags(sp)
-    sp.set_defaults(func=cmd_wifi_hidden, writes=True)
+    _writer(sp, cmd_wifi_hidden)
 
     join_p = sub.add_parser('join', help='join a Wi-Fi network with our own wpa_supplicant (needs '
                                          'the debug SSH login; see docs/autorun.md)')
@@ -526,7 +552,7 @@ def build_parser():
                                    'spaces as dashes')
     sp.add_argument('--no-start', action='store_true', help='install only; `join start` later')
     sp.add_argument('--dry-run', action='store_true', help='show what would be written')
-    sp.set_defaults(func=cmd_join_install, writes=True)
+    _writer(sp, cmd_join_install)
     sp = jsub.add_parser('start', help='join now (needed after every reboot on stock firmware)')
     sp.set_defaults(func=cmd_join_start)
     sp = jsub.add_parser('status', help='what is installed and how the last join went')
@@ -538,13 +564,13 @@ def build_parser():
     sp.add_argument('state', nargs='?', metavar='auto|amber|green|show|N',
                     help='set the LED (auto=0, amber=1, green=2, or a raw 0-3 value); '
                          'omit or "show" to read it. Live, no reboot.')
-    sp.set_defaults(func=cmd_led, writes=True)
+    _writer(sp, cmd_led)
 
     sp = sub.add_parser('name', help='set the base station name (syNm); applies at the next '
                                      'reboot')
     sp.add_argument('name')
     sp.add_argument('--dry-run', action='store_true')
-    sp.set_defaults(func=cmd_name, writes=True)
+    _writer(sp, cmd_name)
 
     sp = wsub.add_parser('backup', help=f'save the live WiFi blob to {wifimod.BACKUP_DIR}')
     sp.add_argument('--note', default='manual', help='label used in the file name')
@@ -556,7 +582,7 @@ def build_parser():
     sp.add_argument('--reboot', action='store_true', help='reboot to apply after writing')
     sp.add_argument('--no-backup', action='store_true',
                     help='skip backing up the config being replaced')
-    sp.set_defaults(func=cmd_wifi_restore, writes=True)
+    _writer(sp, cmd_wifi_restore)
 
     mode_p = sub.add_parser('mode', help='device role / connection sharing (the join gate)')
     msub = mode_p.add_subparsers(dest='mcmd', required=True)
@@ -568,24 +594,25 @@ def build_parser():
     sp.add_argument('value', nargs='?', metavar='now|N',
                     help='unix time to store (default: now). Any non-zero value opens the gate.')
     sp.add_argument('--dry-run', action='store_true')
-    sp.set_defaults(func=cmd_mode_ctim, writes=True)
+    _writer(sp, cmd_mode_ctim)
 
     sp = msub.add_parser('sharing', help='connection sharing: nat | dhcp | bridge (raNA/raDS/raWB)')
     sp.add_argument('choice', choices=sorted(modemod.SHARING))
     sp.add_argument('--dry-run', action='store_true')
-    sp.set_defaults(func=cmd_mode_sharing, writes=True)
+    _writer(sp, cmd_mode_sharing)
 
     sp = msub.add_parser('wan', help='waCV WAN-uplink bit: wired | wireless | show')
     sp.add_argument('kind', choices=['wired', 'wireless', 'show'])
     sp.add_argument('--dry-run', action='store_true')
-    sp.set_defaults(func=cmd_mode_wan, writes=True)
+    _writer(sp, cmd_mode_wan)
 
     sp = sub.add_parser('rpc', help='call an ACP RPC, or --list the known ones')
     sp.add_argument('name', nargs='?', help='RPC name, e.g. acpd.system.show')
     sp.add_argument('--list', action='store_true', help='print the statically mapped RPC surface')
     sp.add_argument('--json', metavar='JSON', help='inputs as a JSON object; a "hex:.." string '
                                                    'value is sent as raw bytes')
-    sp.add_argument('--force', action='store_true', help='allow RPCs not verified read-only')
+    sp.add_argument('--force', action='store_true', help='allow RPCs not verified read-only on '
+                                                         'this model and firmware')
     sp.add_argument('--dry-run', action='store_true')
     sp.set_defaults(func=cmd_rpc)
 
@@ -593,7 +620,7 @@ def build_parser():
     sp.add_argument('new', nargs='?', metavar='PW|@FILE',
                     help='new password, or @FILE (first line); omit to be prompted')
     sp.add_argument('--dry-run', action='store_true')
-    sp.set_defaults(func=cmd_admin_password, writes=True)
+    _writer(sp, cmd_admin_password)
 
     sp = sub.add_parser('info', help='model, firmware and whether this combination is tested')
     sp.set_defaults(func=cmd_info)
@@ -609,12 +636,12 @@ def build_parser():
 
 
 def run(args):
-    """Run a parsed command, warning first if it is a real write to an untested device.
+    """Run a parsed command; a real write to an untested device is refused unless --untested.
     Secrets must already be resolved (see main); `airportctl ui` calls this directly."""
     # `led` and `mode wan` also have read-only forms
     reading = getattr(args, 'state', 'x') in (None, 'show') or getattr(args, 'kind', None) == 'show'
     if getattr(args, 'writes', False) and not getattr(args, 'dry_run', False) and not reading:
-        warn_if_untested(args)
+        require_tested(args)
     args.func(args)
 
 

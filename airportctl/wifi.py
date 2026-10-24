@@ -52,6 +52,15 @@ def radios(wifi):
     return rs
 
 
+def band(index, radio):
+    """'2.4' or '5': from the radio's channel (raCh), else by position as on the A1392 (radio 0 =
+    2.4 GHz). Models differ: on the A1301 radio 0 is the 5 GHz one."""
+    ch = radio.get('raCh')
+    if isinstance(ch, int) and ch:
+        return '5' if ch > 14 else '2.4'
+    return '2.4' if index == 0 else '5'
+
+
 def pmk(password, ssid):
     """WPA/WPA2 PMK = PBKDF2-HMAC-SHA1(password, ssid, 4096, 32). Confirmed on-device: the base
     station stores this in raWE and writes it verbatim into hostapd wpa_psk."""

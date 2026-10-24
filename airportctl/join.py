@@ -21,16 +21,18 @@ at every boot.
 
 Needs the debug SSH login (dbug=0x3000, see docs/dbug.md), which is a manual prerequisite,
 and an `ssh` client on PATH (OpenSSH; tested on Linux). The root password is the admin
-password.
+password. It also needs the hardware the payload is made for: an Atheros radio (autorun.sh
+makes wlan2 from ath0) and the CPU the binaries are built for; `install` checks both first.
 """
 import hashlib
 import ipaddress
 import os
 import shlex
+import struct
 import subprocess
 import tempfile
 
-from . import acp
+from . import acp, models
 from . import wifi as wifimod
 
 F = '/mnt/Flash'
@@ -135,6 +137,55 @@ def _payload(name):
         return f.read()
 
 
+# ELF (e_machine, EI_DATA) -> NetBSD hw.machine_arch
+ELF_ARCH = {(8, 2): 'mipseb', (8, 1): 'mipsel', (40, 2): 'armeb', (40, 1): 'arm'}
+
+
+def payload_arch():
+    """The hw.machine_arch the bundled binaries run on, read from their ELF headers."""
+    archs = set()
+    for name in ('wpa_supplicant', 'dhcpc'):
+        head = _payload(name)[:20]
+        if head[:4] != b'\x7fELF':
+            raise RuntimeError(f'payload/{name} is not an ELF binary')
+        machine = struct.unpack('>H' if head[5] == 2 else '<H', head[18:20])[0]
+        archs.add(ELF_ARCH.get((machine, head[5]), f'ELF machine {machine}'))
+    if len(archs) != 1:
+        raise RuntimeError(f'payload binaries disagree on the CPU: {sorted(archs)}')
+    return archs.pop()
+
+
+def support(dev):
+    """Whether the bundled join can run on a device, judged from what ACP reports
+    (acp.read_device) and the model registry: (True | False | None, why). None = the CPU
+    isn't in the registry; `install` reads it over SSH."""
+    m = models.get(dev.get('syAP'))
+    wifi = models.wifi_family(dev.get('card')) or (m and m.wifi)
+    if wifi != 'atheros':
+        card = repr(dev['card']) if dev.get('card') else 'unknown'
+        return False, (f'its Wi-Fi is {card}, and autorun.sh makes the client interface from an '
+                       'Atheros radio (ath0)')
+    want = payload_arch()
+    if m and m.arch and m.arch != want:
+        return False, (f'the bundled wpa_supplicant and dhcpc are {want} binaries and this model '
+                       f'is {m.arch}: it needs a build for {m.arch} first (crossdev/)')
+    if m and m.arch:
+        return True, f'Atheros Wi-Fi, {m.arch} CPU'
+    return None, 'Atheros Wi-Fi; the CPU is not in the registry, `join install` checks it over SSH'
+
+
+def check_device(host, password):
+    """Refuse before anything is written when the payload can't run here: the Wi-Fi from
+    ACP, then the CPU over SSH (authoritative, whatever the registry says)."""
+    ok, why = support(acp.read_device(host, password))
+    if ok is False:
+        raise RuntimeError(f'`join` cannot run on this base station: {why}')
+    arch, want = _sh(host, password, '/sbin/sysctl -n hw.machine_arch').strip(), payload_arch()
+    if arch != want:
+        raise RuntimeError(f'`join` cannot run on this base station: its CPU is {arch!r} and the '
+                           f'bundled binaries are {want} (crossdev/ builds them)')
+
+
 def running(host, password):
     """PIDs of our supplicant on the Express (empty if not joined)."""
     out = _sh(host, password, '/bin/ps ax | while read pid rest; do case "$rest" in '
@@ -156,6 +207,7 @@ def install(host, password, ssid, wifi_password, ip='dhcp', gateway=None,
         if name == old:
             name = None
     conf = wpa_conf(ssid, wifi_password)
+    check_device(host, password)    # read-only, so a dry run checks too
     binaries = {name: _payload(name) for name in ('wpa_supplicant', 'dhcpc')}
     if ip == 'dhcp':
         how = 'with an address from DHCP' + (f' (else {fallback_ip}, netmask {netmask}, gateway '

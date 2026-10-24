@@ -1,101 +1,80 @@
-# The ACP RPC surface of firmware 7.8.1
+# ACP RPCs
 
-ACP exposes two things: ~520 **properties** (`getprop`/`setprop`, opcodes 0x14/0x15) and
-**RPCs** (opcode 0x19), which carry a CFL plist `{function: <name>, inputs: {...}}` and
-return `{status: ..., outputs: {...}}`. The RPCs are the richer interface — they are what
-AirPort Utility and the base station's own daemons use for anything that isn't a flat
-setting. Embedded Ideation's
-[2016 notes](https://www.embeddedideation.com/2016/04/24/airport-hacking-update/) mention that
-the RPC interface exists (with WPS and DHCP operations, among others) but leave it
-unimplemented; we found no published list of the RPCs.
+ACP opcode `0x19` carries a CFL plist `{function: <name>, inputs: {...}}` and returns
+`{status: ..., outputs: {...}}`. AirPort Utility and the base station's own daemons use RPCs
+for everything that isn't a flat property ([properties.md](properties.md)).
 
-This page covers every RPC the firmware registers. Each one was classified by reading its
-decompiled handler, and the read-only ones were **called on a live A1392 (7.8.1) on
-2026-09-24**. The results are below.
+Classification from the decompiled handlers (F); every **read** RPC called on an A1392 on
+7.8.1 (L). Schemas: `airportctl/rpc.py`.
 
 ```sh
-airportctl rpc --list                    # everything, read-only ones unmarked
-airportctl rpc acprpc.show               # the live registry, straight from the device
-airportctl rpc wifi.scan.results.wlan1   # read-only calls need no --force; inputs are filled in
+airportctl rpc --list                    # all mapped RPCs; unmarked = read-only
+airportctl rpc acprpc.show               # the live registry
+airportctl rpc wifi.scan.results.wlan1   # read-only calls: inputs filled in, no --force on a tested model
 ```
 
-## Two registries, 88 names
+## Registries
 
-`acprpc.show` prints the daemon's live registry. The firmware has **88** distinct RPC names
-(the per-interface set counted once). How many are registered at a time depends on the
-state: **107** on the test unit as a normal two-radio access point with the WAN unplugged,
-**109** with a wired WAN uplink (DHCPv6 adds two), 85 in the join-test state below. They come from two sources:
+88 distinct names (per-interface sets counted once), from two registrars:
 
-* **ACPd's own** — registrar `FUN_006717dc`, listed with flags `0x0`/`0x1`. 55 names;
-  the regenerated map is `re/rpc_map.txt`. 54 were live in both states: all but
-  `pppoe.test-client.check-connection`, which is presumably registered only with PPPoE
-  configured.
-* **Registered by other daemons over IPC** — registrar `FUN_0080b058`, listed with flags
-  `0x2`. ACPd forwards the call to the process that registered the name:
-
-  | registrant | names |
-  |---|---|
-  | hostapd, **one set per Wi-Fi interface** (`wlan1` below) | `wifi.{channel,mcs,tx.rate,mcast.rate}.{get,set}.<if>`, `wifi.statistics.<if>`, `wifi.scan.{results,request}.<if>`, `wifi.{debug,ampdu}.set.<if>`, `wifi.rotate.gtk.<if>`, `wifi.tal.{add_update,remove}.<if>`, `wifi.neighbor.set.<if>`, `wsc.internal.{start,stop,preauthorize,authorize,denied}.<if>` |
-  | dhcpd | `dhcp.server.leases.get` |
-  | dhclient | `dhcp.client.interface.state`, `dhcp.client.lease.action`; the DHCPv6 instance (`dhclient -P`, started once the WAN has link) registers `dhcp6.client.interface.state` + `dhcp6.client.lease.action` instead (family 24 = `AF_INET6`, `FUN_00556de0`) |
-  | mDNSResponder | `mdns.btmm.user`, `mdns.btmm.clearAllUsers`, `icloud.mdns.lhbag` |
-  | iCloudd | `icloud.newcastle.bag`, `icloud.mdns.badsig`, `icloud.cached.lhbag` |
-
-  The map is `re/rpc_map_remote.txt` (`RpcMap.java 0x80b058`). The hostapd names are
-  built at run time (`"wifi.statistics." + ifname`), so the script shows them as `?`. The
-  schemas in `airportctl/rpc.py` were resolved by hand from `FUN_005b44fc` (hostapd) and
-  `FUN_005cbf48` (Apple's wpa_supplicant, which registers a similar set in client mode).
-
-Per-interface names only exist while that interface's hostapd is running. As a normal
-access point both radios' sets were registered: 53 remote names = 22 for `wlan0` + 22 for
-`wlan1` + the 9 from dhcpd, dhclient, mDNSResponder and iCloudd (the two `dhcp6.client.*` names
-were absent: WAN unplugged, no DHCPv6). With the WAN cabled (2026-09-28) they appear: 55
-remote, 109 total; every read-only call returned the same shape as before. In the join-test state (the replacement supplicant from
-[join-mode.md](join-mode.md) on `wlan2`, `wlan0` destroyed) only `wlan1`'s set was there.
-`wifi.statistics.wlan0` failed as unknown, even though `acpd.system.show` still listed
-`wlan0`: ACPd's own view goes stale when something outside it changes the interfaces.
-
-## Wire behaviour, as observed
-
-* **Unknown name and missing required input fail the same way:** the ACP header carries
-  error `0xffffe5b9` = −6727 (`kNotFoundErr`) and no body. `acpmon.show` with no `cmd`
-  fails like this; with `cmd: ""` it works.
-* **Handler errors** come back in the body instead: `{'outputs': {}, 'status': -6727}`
-  (`acpd.system.interfaces` in the join-test state).
-* **Negative integers are 8-byte signed CFL ints** (RSSI −52, `txrate` −1, status −6727).
-  1/2/4-byte ints are unsigned, as in Apple's bplist. `cfl.py` decoded all ints as
-  unsigned before this was found.
-* **Types 7 and 10 are both strings on the wire.** 10 reaches the handler as a C `char *`
-  (e.g. `btmm.rpc` `strcmp`s `action` against `"start"`), 7 as a `CFString`. That settles
-  the one open question of the static map.
-
-## Every RPC, classified
-
-**read** = handler only reads; called live. **action** = does something but stores no
-setting. **event** = a notification that a helper daemon sends *into* ACPd; calling it
-yourself injects a fake event. **write** = changes live or stored settings.
-
-### read (all called on the A1392)
-
-| RPC | inputs → outputs | what it returns |
+| Registrar | Flags in `acprpc.show` | Names |
 |---|---|---|
-| `acprpc.show` | `cmd` → `output` | the live registry (name, flags, `BUSY` while it runs) |
-| `acpmon.show` | `cmd` → `output` | ACP monitoring sessions (kqueue fds, session list) |
-| `acpd.system.show` | → `output` | ~6 KB text dump of ACPd's system object: role ("DHCP/NAT via 802.3"), flag word decoded (NAT, DHCP, IPv6 modes, BTMM, `last cfg time` = `ctim`), each Ethernet PHY with link state and WAN/LAN role, radios with channel and mode (`ath0` mode 6, `ath1` mode 5; the channels moved from 6/132 to 1/108 across a reboot, both radios on auto), VAPs with SSID/MAC, bridge members, LAN address and DHCP range |
-| `acpd.system.interfaces` | → `data` | **the interface tree**: `config` ("DHCP/NAT via Ethernet"), `WAN` (name, MAC, IPv4/IPv6 addresses), `LAN` = `bridge0` with its members: the Ethernet port with its ARP `Cache` and `SwitchCache` (MACs seen per switch port), and each VAP with `SSID`, `BSSID`, `Channel` ("108, ht20/ht40"), `PHY` ("802.11a/n"), `opmode`, `clients` and its parent radio (`ath0`/`ath1`). Works as a normal AP; returned status −6727 in the join-test state, most likely because ACPd's list still held the destroyed `wlan0` (the WAN port was unplugged in both states, so that isn't it) |
-| `acp.getStaticConfig` | `variables`(dict, default `{}`) → `variables` | **the boot environment**: `apple-sn` (serial), `ethaddr`, `apple-sku` (`ETSI` = EU regulatory domain), `apple-minver`, `radio-cal-ath0/1` (calibration blobs). Pass `{name: ...}` keys to read single variables |
-| `wifi.interface.stats.get` | → `data` | net80211 counters per VAP, zeros omitted (`rx_beacon`, `rx_mgmt`, `rx_ssidmismatch`, `tx_badstate`, …) |
-| `wifi.chain.noise.get` | `index` → `data` | per-chain noise floor for radio *index*: `factory-cal-nf`, `median-pwr`, `uncal-nf`, control/extension channel (e.g. −97/−96 dBm) |
-| `wifi.antenna.config.get` | `index` → `rxant`, `txant` | **a stub**: the handler validates `index` and never writes the outputs; always 0/0 |
-| `wifi.channel.get.<if>` | `interface` → `channel` | 1 on `wlan0` (2.4 GHz), 108 on `wlan1` (5 GHz) |
-| `wifi.mcs.get.<if>` | `interface` → `mcsindex` | 127 on both radios (presumably auto) |
-| `wifi.tx.rate.get.<if>` | `interface` → `txrate` | −1 on both radios (presumably auto) |
-| `wifi.mcast.rate.get.<if>` | `interface` → `rate` | 2 on `wlan0`, 6 on `wlan1` (Mb/s) |
-| `wifi.statistics.<if>` | `interface` → `data` | `{wlan1: [...]}`: one entry per associated station; empty with no clients |
-| `wifi.scan.results.<if>` | `interface` → `data` | **the base station's own site survey**, with decoded IEs: `SSID_STR`, `BSSID`, `CHANNEL`, `RSSI`, `NOISE`, `RATES`, `CAPABILITIES`, `RSN_IE` (ciphers/AKMs), `HT_CAPS_IE`, `80211D_IE` (country, per-band max power), raw `IE`. As an AP: 31 networks on channels 1–13 from `wlan0`, 9 on 5 GHz from `wlan1` |
-| `dhcp.server.leases.get` | `pool` → `data` | `{leases: [{ipAddress, macAddress, hostname, interface, pool, leaseEnds, leaseEndsTime}]}`; `pool` is one of `all active free expired abandoned backup` |
+| ACPd, `FUN_006717dc` | `0x0` / `0x1` | 55 (`pppoe.test-client.check-connection` only with PPPoE configured) |
+| other daemons over IPC, `FUN_0080b058`; ACPd forwards the call | `0x2` | below |
 
-Trimmed samples (identifiers replaced):
+| Registrant | Names |
+|---|---|
+| hostapd, one set per Wi-Fi interface (22 names) | `wifi.{channel,mcs,tx.rate,mcast.rate}.{get,set}.<if>`, `wifi.statistics.<if>`, `wifi.scan.{results,request}.<if>`, `wifi.{debug,ampdu}.set.<if>`, `wifi.rotate.gtk.<if>`, `wifi.tal.{add_update,remove}.<if>`, `wifi.neighbor.set.<if>`, `wsc.internal.{start,stop,preauthorize,authorize,denied}.<if>` |
+| dhcpd | `dhcp.server.leases.get` |
+| dhclient (IPv4) | `dhcp.client.interface.state`, `dhcp.client.lease.action` |
+| dhclient -P (DHCPv6, once the WAN has link) | `dhcp6.client.interface.state`, `dhcp6.client.lease.action` |
+| mDNSResponder | `mdns.btmm.user`, `mdns.btmm.clearAllUsers`, `icloud.mdns.lhbag` |
+| iCloudd | `icloud.newcastle.bag`, `icloud.mdns.badsig`, `icloud.cached.lhbag` |
+
+hostapd schemas from `FUN_005b44fc`; Apple's wpa_supplicant registers a similar set in
+client mode (`FUN_005cbf48`). Per-interface names exist only while that interface's hostapd
+runs.
+
+| State (L) | Registered |
+|---|---:|
+| A1392, AP, WAN unplugged | 107 = 54 ACPd + 22 `wlan0` + 22 `wlan1` + 9 other |
+| A1392, AP, wired WAN | 109 (+ the two `dhcp6.client.*`) |
+| A1392, replacement supplicant on `wlan2`, `wlan0` destroyed | 85 (only `wlan1`'s set) |
+| A1301, 7.6.9, AP | 94 ([models.md](models.md#acp-and-access)) |
+
+ACPd's own view goes stale when something else changes the interfaces: with `wlan0`
+destroyed, `acpd.system.show` still lists it and `acpd.system.interfaces` returns -6727.
+
+## Wire behaviour
+
+| Case | Result |
+|---|---|
+| Unknown name, or a required input missing | ACP header error `0xffffe5b9` = -6727 (`kNotFoundErr`), no body (`acpmon.show` without `cmd` fails; `cmd: ""` works) |
+| Handler error | in the body: `{'outputs': {}, 'status': -6727}` |
+| Negative integers | 8-byte signed CFL ints (RSSI -52, `txrate` -1, status -6727); 1/2/4-byte ints are unsigned |
+| Types 7 and 10 | both strings on the wire; 10 reaches the handler as a C `char *`, 7 as a `CFString` |
+
+## Read (all called on the A1392)
+
+| RPC | Inputs → outputs | Returns |
+|---|---|---|
+| `acprpc.show` | `cmd` → `output` | the live registry (name, flags, `BUSY` while running) |
+| `acpmon.show` | `cmd` → `output` | ACP monitoring sessions (kqueue fds, sessions) |
+| `acpd.system.show` | → `output` | ~6 KB text: role ("DHCP/NAT via 802.3"), decoded flag word (NAT, DHCP, IPv6 modes, BTMM, `last cfg time` = `ctim`), Ethernet PHYs with link and WAN/LAN role, radios with channel and mode, VAPs with SSID/MAC, bridge members, LAN address, DHCP range |
+| `acpd.system.interfaces` | → `data` | interface tree: `config`, `WAN` (name, MAC, IPv4/IPv6), `LAN` = `bridge0` with members: Ethernet with ARP `Cache` and `SwitchCache`, each VAP with `SSID`, `BSSID`, `Channel`, `PHY`, `opmode`, `clients`, parent radio |
+| `acp.getStaticConfig` | `variables` (dict, default `{}`) → `variables` | the factory nvram ([boot.md](boot.md#factory-nvram-flash3)); `{name: ...}` keys read single variables |
+| `wifi.interface.stats.get` | → `data` | net80211 counters per VAP, zeros omitted |
+| `wifi.chain.noise.get` | `index` → `data` | per-chain noise floor for a radio: `factory-cal-nf`, `median-pwr`, `uncal-nf`, control/extension channel |
+| `wifi.antenna.config.get` | `index` → `rxant`, `txant` | stub: always 0 / 0 |
+| `wifi.channel.get.<if>` | `interface` → `channel` | |
+| `wifi.mcs.get.<if>` | `interface` → `mcsindex` | 127 (auto) |
+| `wifi.tx.rate.get.<if>` | `interface` → `txrate` | -1 (auto) |
+| `wifi.mcast.rate.get.<if>` | `interface` → `rate` | Mb/s (2 on 2.4 GHz, 6 on 5 GHz) |
+| `wifi.statistics.<if>` | `interface` → `data` | one entry per associated station |
+| `wifi.scan.results.<if>` | `interface` → `data` | site survey with decoded IEs: `SSID_STR`, `BSSID`, `CHANNEL`, `RSSI`, `NOISE`, `RATES`, `CAPABILITIES`, `RSN_IE`, `HT_CAPS_IE`, `80211D_IE`, raw `IE` |
+| `dhcp.server.leases.get` | `pool` → `data` | `{leases: [{ipAddress, macAddress, hostname, interface, pool, leaseEnds, leaseEndsTime}]}`; `pool` ∈ `all active free expired abandoned backup` |
+
+Samples (identifiers replaced):
 
 ```text
 acp.getStaticConfig  -> {'apple-minver': '76200.16', 'apple-sku': 'ETSI', 'apple-sn': '<serial>',
@@ -109,32 +88,37 @@ dhcp.server.leases.get {'pool': 'active'} -> {'leases': [{'ipAddress': '10.0.1.4
                          'pool': 'active', 'leaseEndsTime': 129716, …}]}
 ```
 
-`getStaticConfig` returns the serial number and calibration data, and `scan.results`
-returns your neighbours' networks. Don't paste either into a public issue unedited.
+`acp.getStaticConfig` returns the serial and calibration data; `wifi.scan.results` returns
+neighbours' networks.
 
-### action
+## Action
 
-| RPC | what the handler does |
+Does something; stores no setting.
+
+| RPC | Handler |
 |---|---|
-| `acpd.checkConnection` | HTTP GET `http://apsu.apple.com/version.xml`: the firmware-update check. Not read-only: it makes an outbound request |
+| `acpd.checkConnection` | HTTP GET `http://apsu.apple.com/version.xml` (update check; outbound request) |
 | `acpd.clearLog` | truncates `/var/log/ACPd.log` and `.1`–`.3` |
-| `syslogd.flush` | **discards** the in-memory syslog buffer (it frees the entries, it doesn't write them out) |
-| `acpd.update.phys` | calls a PHY-refresh hook if one is installed |
+| `syslogd.flush` | discards the in-memory syslog buffer |
+| `acpd.update.phys` | calls a PHY-refresh hook if installed |
 | `acpd.busyLoopControl` | `cmd: start` spawns `/sbin/busyloop` (CPU load), `stop` kills it |
-| `btmm.rpc` | `action: start|stop` Back to My Mac |
-| `wifi.diagnostic.mode` | `action: start|stop` → posts internal events 10/11 |
-| `wifi.scan.request` | runs a scan **only when `ctim == 0`** (unconfigured / setup mode). With the configuration timestamp set it's a no-op returning 0. The old static reading had this inverted |
-| `wifi.scan.request.<if>` | asks that interface's hostapd to scan |
+| `btmm.rpc` | `action: start\|stop` Back to My Mac |
+| `wifi.diagnostic.mode` | `action: start\|stop` → internal events 10 / 11 |
+| `wifi.scan.request` | scans only when `ctim == 0` (setup mode); otherwise a no-op returning 0 |
+| `wifi.scan.request.<if>` | that interface's hostapd scans |
 | `wifi.rotate.gtk.<if>` | rotates the group key |
-| `pppoe.test-client.check-connection` | `serviceName`, `userName`, `password` → `result`: spawns `pppoectl` + `ifwatchd` to test a PPPoE login |
-| `remoteBonjour.browse` | `serviceType`, `domain` (default `local.`) → `uuid`: starts a Bonjour browse on behalf of the ACP session |
-| `acp.injectPacket` | `packetInfo`: writes a raw frame to `/dev/bpf` (Ethernet or 802.11) |
-| `user.checkFileSharingAccess` | `flags`, `user`, `pass` → `access`, `info`: checks credentials against the file-sharing user list (`usrd`) |
-| `wsc.start` / `wsc.stop` / `wsc.authorize` | open/close a WPS window, authorize a client by MAC + PIN (flags 0x1) |
-| `dhcp.client.lease.action`, `dhcp.client.interface.state`, `dhcp6.client.lease.action`, `dhcp6.client.interface.state` | ACPd → dhclient commands (renew/release, interface up/down), v4 and v6 instance |
-| `mdns.btmm.clearAllUsers`, `icloud.newcastle.bag`, `icloud.mdns.badsig`, `icloud.cached.lhbag` | BTMM / iCloud housekeeping (commands to mDNSResponder / iCloudd; handlers not read) |
+| `pppoe.test-client.check-connection` | `serviceName`, `userName`, `password` → `result`: spawns `pppoectl` + `ifwatchd` |
+| `remoteBonjour.browse` | `serviceType`, `domain` (default `local.`) → `uuid` |
+| `acp.injectPacket` | `packetInfo`: raw frame to `/dev/bpf` (Ethernet or 802.11) |
+| `user.checkFileSharingAccess` | `flags`, `user`, `pass` → `access`, `info` (file-sharing users, `usrd`) |
+| `wsc.start`, `wsc.stop`, `wsc.authorize` | WPS window; authorize a client by MAC + PIN (flags 0x1) |
+| `dhcp.client.lease.action`, `dhcp.client.interface.state`, `dhcp6.client.lease.action`, `dhcp6.client.interface.state` | ACPd → dhclient: renew/release, interface up/down |
+| `mdns.btmm.clearAllUsers`, `icloud.newcastle.bag`, `icloud.mdns.badsig`, `icloud.cached.lhbag` | BTMM / iCloud housekeeping (handlers not read) |
 
-### event (daemon → ACPd notifications; don't call)
+## Event
+
+Notifications a helper daemon sends into ACPd; calling one injects a fake event. Most queue
+the dict for the Wi-Fi or DHCP state machine (`FUN_00674f64`).
 
 `wifi.ap.status`, `wifi.sta.status`, `wifi.sta.event`, `wifi.legacy.wds.status`,
 `wifi.legacy.wds.link`, `wifi.dynamic.wds.extender.status`, `wifi.proxysta.status`,
@@ -144,50 +128,42 @@ returns your neighbours' networks. Don't paste either into a public issue unedit
 `dhcp.client.lease.{accept,reject,release}`, `dhcp6.client.lease.address-delete`,
 `dhcp6.client.lease.prefix-delegation`.
 
-Most just queue the dict for the Wi-Fi or DHCP state machine (`FUN_00674f64`). Several
-act at once: `dhcp6.client.lease.address-delete` runs `ifconfig <wan> inet6 <addr>
--alias`, and `wsc.internal.joinSucceeded` hands a PSK to the WPS state machine.
+Immediate effects: `dhcp6.client.lease.address-delete` runs
+`ifconfig <wan> inet6 <addr> -alias`; `wsc.internal.joinSucceeded` hands a PSK to the WPS
+state machine.
 
-### write
+## Write
 
-| RPC | effect |
+| RPC | Effect |
 |---|---|
-| `acp.setStaticConfig` | **sets boot-environment variables** (serial, MAC, radio calibration). Gated by `FUN_0067f05c` (not yet identified). Can brick the unit: never call it |
-| `wifi.diagnostic.caldata` | `action: read|write`, `interface`, `path`: moves `radio-cal-*` radio calibration data to or from a file (from the handler's strings; not traced in detail) |
-| `acpd.setDirtyPlist` | `drTY`, `allowMinimal`: applies a configuration change set. This is AirPort Utility's "Update" |
-| `acp.setDynamicStoreValue` | `key`, `value`: writes the `DynS` dynamic store and posts a change event |
-| `wifi.channel.announce` | `interface`, `channel`: switches the radio **and stores** `WiFi.radios[n].raCh` |
-| `wifi.antenna.config.set` | a stub, like its getter: validates `index`, does nothing |
+| `acp.setStaticConfig` | sets factory nvram variables (serial, MAC, calibration); gate `FUN_0067f05c`. **Can brick the unit; never call** |
+| `wifi.diagnostic.caldata` | `action: read\|write`, `interface`, `path`: radio calibration to/from a file |
+| `acpd.setDirtyPlist` | `drTY`, `allowMinimal`: applies a configuration change set (AirPort Utility's "Update") |
+| `acpd.parseDirtyPlist` | `drTY` → `result` (`"minimal"` / `"restart"` / `"reboot"`), `interruptions`. Same worker as `setDirtyPlist` (`FUN_00658a18`) with the apply flag 0, so likely a dry run; helpers `FUN_0067e484`, `FUN_0067f5fc` and the `drTY` format unread. Not called |
+| `acp.setDynamicStoreValue` | `key`, `value`: writes the `DynS` store, posts a change event |
+| `wifi.channel.announce` | `interface`, `channel`: switches the radio and stores `WiFi.radios[n].raCh` |
+| `wifi.antenna.config.set` | stub |
 | `wifi.{channel,mcs,tx.rate,mcast.rate,debug,ampdu}.set.<if>` | runtime hostapd settings (`mcast.rate.set` also takes `type`) |
 | `wifi.tal.add_update.<if>`, `wifi.tal.remove.<if>` | `talEntry` dict |
-| `wifi.neighbor.set.<if>` | 802.11k neighbour report entry: `action`, `channel`, `operatingclass`, `bssidinfo`, `phytype`, `mac` |
+| `wifi.neighbor.set.<if>` | 802.11k neighbour report: `action`, `channel`, `operatingclass`, `bssidinfo`, `phytype`, `mac` |
 | `wsc.internal.{start,stop,preauthorize,authorize,denied}.<if>` | ACPd → hostapd WPS control |
 | `mdns.btmm.user` | `name`, `secret`: BTMM credentials |
 | `icloud.mdns.lhbag` | `lhBagData` |
-| `cloud.update.<service>` | `changes` → `changes`, `commitUUID`: iCloud-pushed config (the unit registers one per service UUID, e.g. `cloud.update.f21bbe1f-…`) |
+| `cloud.update.<service>` | `changes` → `changes`, `commitUUID`: iCloud-pushed config, one per service UUID |
 
-### Not called yet: `acpd.parseDirtyPlist`
-
-`drTY` → `result`, `interruptions`. It runs the same worker as `setDirtyPlist`
-(`FUN_00658a18`) with its apply flag set to 0. It answers `"minimal"`, `"restart"` or
-`"reboot"`, which says how disruptive a change set would be, and `interruptions` names
-what would drop. The worker only commits when the flag is set, so this looks like a true
-dry run. But the per-property helpers it calls (`FUN_0067e484`, `FUN_0067f5fc`) haven't
-been read, and the `drTY` format isn't known. It stays uncalled until both are clear.
-If it is a dry run, it's the safe way to learn which properties apply live.
+Unused: the generic `<group>.sysctl` registrar `FUN_00671808` has no callers (would expose
+debug variables via `group` / `name` / `action`, `=`-prefixed action writes).
 
 ## Registration encoding
 
-`FUN_006717dc(name, flags, handler, <schema...>)` is ACPd's registrar and
-`FUN_0080b058` the remote one, with the same arguments. The schema is a varargs list
-terminated by a NULL name. `FUN_00671404` turns it into the plist
-`{flags: <int>, params: [{name, type, defaultType, input}, ...]}`. The per-entry stride is
-**variable**, which is the thing to get right when reading these call sites:
+`FUN_006717dc(name, flags, handler, <schema...>)` (ACPd) and `FUN_0080b058` (remote) take
+the same arguments. The schema is a NULL-name-terminated varargs list; `FUN_00671404` turns
+it into `{flags: <int>, params: [{name, type, defaultType, input}, ...]}`. Variable stride:
 
 ```c
 name = w[0];  if (name == NULL) end_of_list;
-type = w[1];                       /* must be non-zero */
-input = w[2];                      /* bool: input parameter vs output */
+type = w[1];                       /* non-zero */
+input = w[2];                      /* input vs output parameter */
 if (input == 0)            stride = 3;
 else {
     defaultType = w[3];
@@ -196,36 +172,22 @@ else {
 ```
 
 Names are inline CoreFoundation constant strings (`isa == 0x56070000`, text at `+8`).
-
-Regenerate with `ghidra_scripts/RpcMap.java` (see [extracting-acpd.md](extracting-acpd.md)):
-
-```sh
-analyzeHeadless ... -postScript RpcMap.java 0x6717dc rpc_map.txt          # ACPd's own
-analyzeHeadless ... -postScript RpcMap.java 0x80b058 rpc_map_remote.txt   # other daemons
-```
-
-The script tracks o32 arguments through registers and the outgoing stack area. Up to
-2026-09-24 it treated a store (`sb s2, …`) as a write to `s2`. That lost the value and
-silently cut short the schemas of `acpmon.show`, `pppoe.test-client.check-connection`,
-`icloud.mdns.badsig` and `icloud.cached.lhbag`.
-
-The generic `<group>.sysctl` registrar (`FUN_00671808`; the old version of this page
-called it `<group>.show`) exists in the binary but has no callers, and no `.sysctl` name
-appears in the live registry. It would expose debug variables with a `group`/`name`/
-`action` interface, where an `action` starting with `=` writes the variable.
+Regenerate with [`ghidra_scripts/RpcMap.java`](../ghidra_scripts/README.md):
+`RpcMap.java 0x6717dc` (ACPd's own), `RpcMap.java 0x80b058` (other daemons; hostapd names are
+built at run time and show as `?`).
 
 ## Type codes
 
-| code | reading | evidence |
+| Code | Type | Seen in |
 |---|---|---|
 | 1 | bool | `allowMinimal` |
 | 2 | int or data | `interruptions`, `lhBagData` |
-| 3 | data | `mac`/`psk` in the WPS calls; `bss_info`, `ies` |
-| 5 | dictionary | `data`, `credentials`, `variables`, `drTY`; live replies |
-| 7 | string (`CFString` in the handler) | live `output` replies |
-| 9 | number | `defaultType` switch in `FUN_00671404`; live replies |
-| 10 | string (C `char *` in the handler) | live `cmd`/`interface`/`pool` inputs |
+| 3 | data | `mac`, `psk` (WPS); `bss_info`, `ies` |
+| 5 | dictionary | `data`, `credentials`, `variables`, `drTY` |
+| 7 | string (`CFString` in the handler) | `output` replies |
+| 9 | number | `defaultType` switch in `FUN_00671404` |
+| 10 | string (C `char *` in the handler) | `cmd`, `interface`, `pool` |
 | 12 | IPv4 address | `ipv4` (DHCPv4), `address` (DHCPv6) |
-| 13 | MAC address (6 bytes) | handlers copy 6 bytes |
-| 14 | session handle | only `__acpSession` |
-| 15 | any | only `acp.setDynamicStoreValue`'s `value` |
+| 13 | MAC address | 6 bytes |
+| 14 | session handle | `__acpSession` only |
+| 15 | any | `acp.setDynamicStoreValue` `value` |

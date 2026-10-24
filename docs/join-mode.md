@@ -1,80 +1,56 @@
-# AirPort Express A1392 — "airport mode" (create / join / extend): the gate, and how to open it
+# Client mode ("join a wireless network")
 
-**Status:** the gate is identified, implemented in `airportctl`, and **confirmed on hardware
-(2026-09-23)** — setting `ctim` does open it and the device comes up as an STA (`raSt=1`). **But the
-firmware's own join fails one layer lower:** its bundled `wpa_supplicant` **segfaults at startup**
-(its net80211 driver "add interface" step fails and the failure-cleanup path NULL-derefs), so native
-client join is **non-viable on 7.8.1** from configuration alone. **A replacement supplicant built from
-stock sources does work** (verified 2026-09-23): the Express joins a third-party WPA2 router as a
-client on 2.4 GHz and serves AirPlay there, until the next reboot. See
-["A replacement supplicant: works"](#a-replacement-supplicant-works) and
-[`crossdev/wpa-build/`](../crossdev/wpa-build/README.md). Everything described about the firmware was
-read out of the binary; everything described as observed was seen on an A1392 running 7.8.1.
+| Layer | A1392 / 7.8.1 | Tool |
+|---|---|---|
+| [Gate](#the-gate): `raSt = 1` honoured only if `ctim ≠ 0` and role ≠ 6 | opens with a stored `ctim`; the radio then comes up as a station (L) | `airportctl mode` |
+| [Firmware supplicant](#firmware-supplicant) (wpa_supplicant 0.6.5) | segfaults at startup with every configuration (L) | none |
+| [Replacement supplicant](#replacement-supplicant) (wpa_supplicant 0.7.3) | joins WPA2-PSK networks, AirPlay on the joined network (L) | `airportctl join` |
 
-## TL;DR
+Other models: `join` needs an Atheros radio and a build for the CPU
+([models.md](models.md#airportctl-on-each-model)). Commands:
+[airportctl](../airportctl/README.md#commands).
 
-The per-radio `raSt` value in the `WiFi` blob (0 = create/AP, 1 = join/STA, 3 = off) is only read
-by the VAP loader when **both** of these hold:
+## The gate
+
+Per radio, `raSt` in the [`WiFi` blob](wifi-blob.md): 0 = create (AP), 1 = join (STA),
+3 = off. The VAP loader reads it only when both conditions hold:
 
 ```c
-/* ACPd FUN_00689ab8, ~0x689d18 */
+/* FUN_00689ab8, ~0x689d18 */
 if (ctx->role /* ctx+0x24 */ == 6 || ctim == 0) { raSt = 0; radio->flags |= 1 /* AP */; }
 else                                            { raSt = blob["raSt"]; if (raSt == 1) radio->flags |= 2 /* STA */; }
 ```
 
-* `ctim` is the ACP property **`ctim` = configuration timestamp**. On a unit that has only ever
-  been written over ACP by hand it has *no stored value* (`getprop ctim` → `0xfffffff6`), so it
-  reads back as 0. **This is why a `raSt=1` join attempt silently comes up as an AP instead.**
-* `role` is computed at daemon init from five stored properties; with the factory values it is
-  **1**, not 6, so it is *not* a blocker for us — but it becomes one if `waCV` bit `0x10000` is
-  ever stored.
+| | |
+|---|---|
+| Gate closed | a blob with `raSt = 1` comes up as an **AP broadcasting the target SSID with its PMK** (an evil twin) |
+| Third condition | in the `else` branch, `raSt = 1` is downgraded to create while `FUN_00672b94()` (= `DAT_00d60334`, soft-reset mode) is non-zero; set by `FUN_00677578` (posts problem `soft`), cleared by `FUN_00675268` |
 
-So the recipe is: **`airportctl mode ctim now`**, then the existing `airportctl wifi join …`,
-then reboot.
+### `ctim`
 
-## The gate, in detail
+| | |
+|---|---|
+| Property | `ctim` (`0x6374696d`), configuration timestamp; table entry `0xc5bdc0`, uint32, flags 0: get- and settable over ACP; no handler |
+| Unset | units configured only over ACP have none (`getprop` → -10), so they count as never configured |
+| Set by | every AirPort Utility apply; `FUN_00686384` (`wifi.wps.credentials`) applies `{ctim: <now>, WiFi: <blob>}`; `airportctl mode ctim now` |
+| Cleared by | nothing in ACPd; persists across reboots |
+| Other effects of `ctim == 0` | problem `ctim` posted (`FUN_00659910`); `ACPCloud_*` / certificate paths gated (`FUN_0067f010`); `wifi.scan.request` scans only in this state |
 
-### `ctim` — configuration timestamp (the live blocker)
+### Role (`ctx+0x24`)
 
-`ctim` (`0x6374696d`) is an ordinary stored ACP property: property-table entry at VMA `0xc5bdc0`,
-type 5 (uint32), flags word 0 → freely readable *and settable* over ACP (`ACPSetPropertyDirectEx`
-rejects only entries with flag bits 0x04/0x08/0x20/0x40/0x80). It has no handler, so
-`ACPGetPropertyDirect` falls through to the generic config store and returns `-10` when the key
-is absent — which is what a hand-configured unit returns.
+`ctx` = `DAT_00e46ec0` (0x230 bytes, filled by `FUN_0065746c`). Role is computed at init from
+five stored properties:
 
-What sets it in Apple's world:
-
-* `FUN_00659910` (called from the init path) does `if (ctim == 0) ACPPostProblemDirect('ctim')` —
-  i.e. an unset `ctim` is one of the device's *problems*, right next to `'pubP'` which is posted
-  when the admin password is still `public`. So `ctim` is a user-visible "this base station has
-  never been configured / its clock is not set" condition.
-* `FUN_00686384` (the `wifi.wps.credentials` handler) builds a config dict
-  `{ ctim: <now, %kC=%i>, WiFi: <blob, %kC=%O> }` and applies it — i.e. **every real
-  configuration apply carries `ctim`**. AirPort Utility does the same; a plain `setprop` of the
-  Wi-Fi settings does not, which is why a factory-reset unit configured by hand stays
-  "unconfigured" as far as the loader is concerned.
-* Nothing in ACPd ever writes or clears `ctim` on its own, so once stored it persists in the
-  config store across reboots.
-
-Other consumers confirm the meaning: `FUN_0067f010` ("is `ctim` invalid?") gates the
-`ACPCloud_*` / certificate paths, and `FUN_00686698` (`wifi.scan.request`) refuses to scan while
-`ctim == 0`.
-
-### `role` = ctx+0x24 — the device role (not a blocker at factory values)
-
-`ctx` is the daemon-global `DAT_00e46ec0` (0x230 bytes, zeroed and filled by `FUN_0065746c`).
-`ctx+0x24` is set once at init from five stored properties:
-
-| prop | type | meaning (from the factory-default writer `FUN_0066dd88` + the sanitiser `FUN_00672c30`) |
+| Property | Type | Meaning |
 |---|---|---|
-| `raNA` | bool | connection sharing: **NAT** ("share a public IP address") |
-| `raDS` | bool | connection sharing: **hand out DHCP leases** |
-| `raWB` | bool | connection sharing: **off / bridge mode** |
-| `waUB` | bool | WAN-port-used-as-bridge |
-| `waCV` | int  | WAN config bitfield; `0x8000` = wired WAN uplink, `0x10000` = **wireless** WAN uplink, `0x800` = a third uplink flavour |
+| `raNA` | bool | connection sharing: NAT |
+| `raDS` | bool | connection sharing: hand out DHCP leases |
+| `raWB` | bool | connection sharing: off / bridge |
+| `waUB` | bool | WAN port used as a bridge |
+| `waCV` | int | WAN config bits: `0x8000` wired uplink, `0x10000` wireless uplink, `0x800` a third uplink type |
 
 ```c
-/* FUN_0065746c, role = ctx+0x24 */
+/* FUN_0065746c */
 if (raNA && !raWB) {                 /* FUN_00653070 */
     role = (waCV & 0x800) ? 2 : ((waCV & 0x10000) ? 6 : 1);
 } else if (!waUB) {
@@ -86,293 +62,23 @@ if (raNA && !raWB) {                 /* FUN_00653070 */
 }
 ```
 
-Factory defaults are `raNA=1, raDS=1, raWB=0, waCV=0x8300` → **role 1**. Role **6** is
-"NAT router whose WAN uplink is wireless", and that is the one value that forces create/AP mode.
-`airportctl/mode.py` reproduces this exactly; `airportctl/test_mode.py` checks every branch
-offline.
+| Role | Setup |
+|---|---|
+| 1 | NAT router, wired WAN (factory: `raNA=1 raDS=1 raWB=0 waCV=0x8300`) |
+| 4 | bridge (`airportctl mode sharing bridge`) |
+| 6 | NAT router with a wireless WAN uplink: forces AP mode, closes the gate |
 
-`waCV`'s uplink bit is also written at *runtime*, right after the Wi-Fi loader runs:
+At run time, after the Wi-Fi loader, ACPd sets the in-memory `waCV` for any STA or WDS radio:
 
 ```c
-/* FUN_0065746c, after FUN_0068b0c8 */
-for each radio: if (radio->flags & 2 /* STA */) waCV = (waCV & ~0x8000) | 0x10000;
-for each radio: if (radio->flags & 8 /* WDS */) waCV = (waCV & ~0x8000) | 0x10000;
-if (waCV & 0x10000) ACPClearProblemDirect('waNL' /* WAN no link */);
+for each radio: if (radio->flags & (2 /* STA */ | 8 /* WDS */)) waCV = (waCV & ~0x8000) | 0x10000;
+if (waCV & 0x10000) ACPClearProblemDirect('waNL');
 ```
 
-That is only the in-memory copy, but it is the clearest proof of what the bit means — and a
-warning: if a client ever *stores* `waCV` with `0x10000`, the role becomes 6 and `raSt` is dead.
-`airportctl mode wan wired` puts it back.
+If `0x10000` is ever stored, the role becomes 6; `airportctl mode wan wired` clears it.
+`airportctl/mode.py` implements the formula; `airportctl/test_mode.py` covers every branch.
 
-### A third gate that is normally inactive
-
-Inside the `else` branch, `raSt == 1` is still downgraded to create when `FUN_00672b94()` is
-non-zero. That function just returns `DAT_00d60334`, the **soft-reset-mode** flag, set by
-`FUN_00677578` ("Begin soft reset mode.", posts problem `'soft'`) and cleared by `FUN_00675268`.
-It is 0 in normal operation.
-
-## What happens once the gate is open
-
-`FUN_00689ab8` sets `radio->flags |= 2`, which makes the VAP type 1 (STA). Then
-`FUN_00684e34` — called immediately after `FUN_0068b0c8` in every init/apply path — walks the
-VAPs and, for `vap->type == 1 && radio->flags & 2`, calls `FUN_006845e4` to write the
-supplicant config and spawns
-
-```
-/sbin/wpa_supplicant -K -M %s -F %s -D net80211 -i %s -c %s
-```
-
-`FUN_006845e4` writes `ap_scan=1`, `network={ ssid="…", scan_ssid=1, mode=0 }` and, for
-`raWM == 5`, `proto=RSN / pairwise=CCMP / group=CCMP TKIP WEP104 / key_mgmt=WPA-PSK` with
-`psk=<64 hex>` taken **verbatim from `raWE`** — i.e. the same 32-byte PMK rule as the AP side, so
-`airportctl wifi join` already supplies the right key material. (`raWM` 3/8 → WPA, 4/6/7 →
-WPA+RSN, 5 → RSN, 1/2/9-12 → WEP.) `proxy_sta=1` / `wds_partner=` only appear for VAP types 7/3,
-i.e. the extend/WDS roles.
-
-The supplicant is **wpa_supplicant v0.6.5** (statically linked into the crunched binary): no SAE,
-no PMF. **In practice it never gets that far — see below.**
-
-## Confirmed on hardware (2026-09-23): the supplicant segfaults at startup
-
-Once the gate is open, `FUN_00684e34` *does* spawn `/sbin/wpa_supplicant`, but it dies instantly
-(zombie). `/sbin/dmesg` shows the cause:
-
-```
-pid NNN (wpa_supplicant), uid 0: exited on signal 11 (core not dumped)
-... badvaddr: 0x0000004C   cause: 0x08 (load)   pc: 0x005CA34C
-```
-
-It is a **NULL-pointer SIGSEGV at startup**, not an association failure. `/sbin/wpa_supplicant`,
-`/sbin/ACPd` and `/bin/ls` are the *same* crunchgen binary (inode-shared), so you can disassemble
-the crash in your own copy of it (image base `0x400000`;
-`mips-linux-gnu-objdump -d -EB -m mips:3000 --start-address=0x… ACPd.bin`). The chain: net80211
-init calls its **"add interface"** step; it fails and init logs **`"Failed to add interface %s"`**;
-the failure path then calls the driver deinit, which unconditionally calls **"Deinit Legacy WDS"**
-(`FUN_005ca318`); that routine reads `drv->0x90` (still NULL, because "add interface" bailed) and
-dereferences it at `+0x4C` → crash. So the real failure is **"failed to add interface"** — the
-supplicant's own EAPOL state-machine init (`eapol_sm_init`) fails — and the segfault is a secondary
-unchecked-NULL bug in the cleanup. The proxy-STA variant (`wifi join --psta`, VAP type 7) gives the
-**identical crash** (same `pc 0x005CA34C`), so it's not a way around this.
-
-The crash is **unconditional and config-independent**: running the supplicant by hand with a config
-that contains only `ctrl_interface=` — no SSID, no PSK, no network — reproduces the exact same crash,
-even against a hostap interface, without disturbing the running AP. It dies before any scan or
-association, so the target network's security (WPA2/mixed/whatever) is irrelevant. Native client
-join is therefore **non-viable on 7.8.1** — this is a bug in Apple's bundled `wpa_supplicant`, not a
-setting. The kernel radio is fine (`hostapd` works), so the route to a working join is to run a
-supplicant of your own — which is what the next section does.
-
-**Capture it without touching credentials:** don't `cat /etc/wpa_supplicant*.conf` (it holds the
-PMK). Everything you need is in `ps` (the zombie), `ifconfig wlan0` (state), and `dmesg` (the signal
-+ register dump), plus static disassembly at the `pc`.
-
-## A replacement supplicant: works
-
-Because the defect is entirely in Apple's userland `wpa_supplicant` and **not** in the kernel or
-radio, the fix is to *bypass* that binary: run a stock `wpa_supplicant` you build yourself on a
-station vap you create by hand. This does not use the `ctim`/`raSt` gate at all — ACPd is never asked
-to join anything.
-
-**Result (A1392, 7.8.1, 2026-09-23):** stock **wpa_supplicant 0.7.3**, cross-compiled by
-[`crossdev/wpa-build/build-wpa.sh`](../crossdev/wpa-build/README.md), scans, associates with a
-third-party WPA2-PSK (CCMP) router, completes the 4-way handshake and carries traffic both ways
-(gateway 0% loss, internet ~21 ms). With `airtunesd` restarted on the station interface, the
-Express advertises `_raop`/`_airplay` on the home network and plays AirPlay from phones and laptops
-there. ACPd keeps running, and the 5 GHz AP stays up alongside the 2.4 GHz client.
-
-**The kernel side.** The `ath` driver advertises `drivercaps=<STA,…,WPA1,WPA2,…,WDS,BGSCAN,…>` and
-`cryptocaps=<…,AES,AES_CCM,…>` — hardware WPA2/CCMP in station mode. Destroy the hostap vap, create a
-managed one (`ifconfig wlan2 create wlandev ath0` comes up `media: … 11ng`, *no* `hostap`), and
-`ifconfig wlan2 scan` lists the neighbours, e.g.
-
-```
-SSID            BSSID              CHAN  S:N   CAPS
-HomeWiFi        xx:xx:xx:xx:xx:xx   11   21:0  EP  RSN HTCAP WME    <- WPA2 (RSN), strong signal
-```
-
-**The ABI surprise.** The kernel is NetBSD 4.0_STABLE, but its `net80211` is **FreeBSD 8-era**
-(vaps, 802.11n), so the NetBSD 4.0 headers are wrong in several places: `SIOCS80211`/`SIOCG80211`
-numbers, the scan request/result ioctls and record layout, `OPTIE` → `APPIE`, and even
-`struct if_msghdr` (152 bytes, not 144). 0.7.3 is the first release whose `driver_bsd.c` speaks
-FreeBSD 8 net80211; with shim headers fixing the rest, it builds with **no edits to upstream source**.
-The full table, and how each value was found, is in the
-[wpa-build README](../crossdev/wpa-build/README.md#why-073-and-the-kernel-abi).
-
-**Running it** — [`crossdev/wpa-build/join-test.sh`](../crossdev/wpa-build/join-test.sh), over the
-LAN cable, ~70 s:
-
-1. `kill -STOP` ACPd, kill the 2.4 GHz `hostapd`, `ifconfig wlan0 destroy`,
-   `ifconfig wlan2 create wlandev ath0` — **one vap per radio**: `ath0` refuses a second vap while the
-   hostap one exists (`SIOCIFCREATE2: EIO`).
-2. Give `wlan2` a static address, then take it **down**, then start the supplicant. 0.7.3's
-   `driver_bsd` downs the interface during init and reads its own `RTM_IFINFO` as "interface removed",
-   which closes its EAPOL socket — it then associates forever but never hears 4-way message 1/4.
-   Starting from a down interface avoids that. (Setting the address first is only the simplest
-   order: it can also change after the handshake, see [Addressing](#addressing-dhcp).)
-3. `kill -CONT` ACPd. It leaves `wlan2` alone.
-4. Restart `/sbin/airtunesd -i wlan2`: it registers `_raop`/`_airplay` only on its `-i` interface
-   (default `bridge0`), and ACPd doesn't respawn it.
-
-The passphrase never leaves the laptop: the harness sends only the derived PMK, into RAM.
-
-**Limits.**
-
-- **Not persistent.** Everything lives in the RAM disk; any reboot or power cut restores the stock
-  AP setup and the harness must be re-run over SSH (cable, or via the Express's own AP). Nothing on
-  the device autostarts from writable storage — see
-  [crossdev § Storage](../crossdev/README.md#storage-usb-and-persistence). `/mnt/Flash` does keep
-  files through power cuts, and the supplicant is now small enough (~295 KB of the ~988 KB free)
-  to live there and skip the upload. Something still has to start it after each boot.
-- **Addressing:** `join-test.sh` uses a fixed address; `airportctl join` uses DHCP by default,
-  see [below](#addressing-dhcp).
-- **Leaf only.** A 3-address station can't bridge other hosts' frames, so the Express's LAN port and
-  AP are *not* joined to the home network — only its own services (AirPlay) move there.
-- **WPA2-PSK only.** No SAE (WPA3), no PMF, no EAP — a 2010 supplicant, built minimal.
-
-### Addressing (DHCP)
-
-**Setting an address does *not* drop the WPA keys.** Earlier notes claimed it did (that
-`SIOCSIFADDR` re-inits the vap). That was an inference from a first join with no GTK, which
-a supplicant restart fixed. The real cause was the EAPOL-socket bug in step 2 above: the
-handshake never completed. Tested on 2026-09-25 on a keyed `wlan2` (fixed-address join to the
-router): adding an alias, removing it, removing the only IPv4 address, adding it back, and
-replacing it with plain `ifconfig wlan2 inet A netmask M` all left `AES-CCM 2:128-bit`
-installed, with router pings at 5/5 and the address reachable from the LAN. AirPlay stayed
-advertised throughout. So a lease can simply be set on the live link.
-
-**The stock `/sbin/dhclient` is tied to ACPd,** so it isn't used. It is ISC dhclient 4.1.0
-with Apple changes (the crunched binary's `main` is `FUN_00556de0`). At startup it connects to
-ACPd and registers `dhcp.client.interface.state`/`dhcp.client.lease.action`, the same names the
-ACPd-launched instance on `bridge0` already holds. On every IPv4 bind (`FUN_00554d84`) it sends
-`dhcp.client.lease.accept` to ACPd's WAN state machine, and no flag turns that off. Its exit hook also runs `acp-update-network` and `dns-update-script`, and its
-`dhclient-script` sets `0.0.0.0` in `PREINIT`. This is the likely cause of the sshd stall seen
-when `dhclient -d wlan2` was tried, rather than DNS alone.
-
-So `airportctl join` uses its own client, [`crossdev/src/dhcpc.c`](../crossdev/src/dhcpc.c)
-(raw `/dev/bpf`, 120 KB static). It runs once and only *reports* the lease as shell variables.
-It never touches the interface, routes or `resolv.conf`. `autorun.sh` then:
-
-1. joins with **no address** on `wlan2` (created, up, down, supplicant);
-2. runs `dhcpc` (DISCOVER → OFFER → REQUEST → ACK; its retransmits cover the handshake
-   still running after `status: associated`);
-3. sets the leased address on the live link and pings the router. Only if the router stays
-   silent for ~10 s does it **re-key** as a fallback: it freezes ACPd, stops the supplicant,
-   sets the address, brings `wlan2` down and starts the supplicant again (the fixed-address
-   order);
-4. moves AirPlay, and leaves a loop behind that renews at T1 (unicast to the server, then
-   broadcast, then a fresh DISCOVER, retrying every minute) and applies a changed address the
-   same way. The loop logs to `/mnt/Memory/dhcp.log`; the lease is in
-   `/mnt/Memory/lease`.
-
-No default route is added and `resolv.conf` is left alone, as on the fixed-address path: AirPlay
-only needs the local subnet. If no server answers, `FALLBACK_IP` (with `GW`/`MASK`) from
-`join.conf` is used when set; otherwise the run fails (amber LED) with the 5 GHz AP and Ethernet
-still up. There is no ARP conflict check (no DHCPDECLINE). A DHCP reservation on the router
-keeps the AirPlay address stable across reboots.
-
-**Name on the network.** ACPd sets the hostname from the base station name (`syNm`):
-"Base Station airPlay station" becomes `base-station-airplay-station`. Its mDNSResponder
-announces that as `<name>.local` on every interface, `wlan2` included, so the Express is reachable
-by name once joined, with no work on our side. `dhcpc` sends the same hostname (DHCP option 12)
-in every DISCOVER and REQUEST, so the router's device list shows it too. `airportctl join
-install --name` (and the Name field in the UI's join card) renames the base station, and both
-names follow, **from the next reboot**. Tested on 2026-09-25 while joined: the write to `syNm`
-was stored and read back, but the hostname, the `_airport._tcp` service name and the `.local`
-name stayed the old ones (checked for about a minute), and the join was not disturbed. After a
-reboot and `join start` the Express came back as `kitchen-express` ("Kitchen Express" as the
-base station name): mDNS announced `Kitchen-Express.local` → the leased `.143`, the old name no
-longer resolved, and the join was otherwise unchanged. Renaming it back took another reboot. A
-rename therefore takes effect when ACPd starts at the next boot.
-
-**Status:** `crossdev/tests/dhcpc-test.sh` runs the client logic against
-busybox `udhcpd` in a network namespace (INIT, INIT-REBOOT, unicast renew, broadcast rebind, NAK,
-timeout). `tests/autorun-mock.sh` runs `autorun.sh` with stubbed device commands and checks the
-order of operations. On the Express (2026-09-25): the address tests above (T1), and `dhcpc` on
-the keyed `wlan2` against a Fastweb router (T3). It got a lease in ~3 s. INIT-REBOOT, unicast
-renew, broadcast rebind and a NAK for a foreign address all behaved as in the offline test, and
-the interface was left untouched. Then the full path (T4): `airportctl join install` with DHCP,
-reboot, `join start`. It joined in 61 s (20 s of that is the post-boot settle wait), leased
-`.143`, set it on the live link with no re-key needed, answered 30/30 pings from the LAN, and
-AirPlay was advertised at the new address (a PipeWire RAOP sink appeared for it). A renewal,
-forced by killing the loop's `sleep`, renewed `.143` in place with no link change (T5). Unicast
-renews then got an immediate ACK; the retransmit seen in T3 came from the address not being on
-the interface yet. This router answers renewals with a fresh 24 h lease but T1/T2 counted from
-the original binding, and the loop follows them. After a power cycle, `join start` got `.143`
-again (80 s, 20/20 pings).
-
-## Recipe: the firmware's own join (reproduces the crash)
-
-Cable to the LAN port, `nmcli c up airport-probe`, then:
-
-```sh
-cd .
-python3 -m airportctl mode show                 # confirm: role 1, ctim <unset>
-python3 -m airportctl mode ctim now             # the fix; read-back must be non-zero
-python3 -m airportctl mode show                 # gate should now say OK
-python3 -m airportctl wifi join YOUR-SSID --wifi-password @/path/to/pw --band 2.4 --reboot
-```
-
-Then over the cable (`tools/essh.sh`), check in this order:
-
-1. `ps | grep wpa_supplicant` — the single most direct yes/no.
-2. `cat /etc/wpa_supplicant*.conf` — should show `ssid="YOUR-SSID"`, `key_mgmt=WPA-PSK`,
-   `psk=<64 hex>` matching our PMK.
-3. `ifconfig wlan0` — `media: … hostap` means it is still an AP (gate not open); a station link
-   shows no `hostap` mode and an associated BSSID.
-4. `tools/find_express.py` to see whether it took a DHCP address on the target network.
-
-**Keep connection sharing on `nat` for the first test** so the Express stays the DHCP router at
-`10.0.1.1` on the cable and recovery is one `airportctl wifi restore` away. Only after a join
-works should you switch to `mode sharing bridge` (what you actually want for AirPlay: the Express
-sits on the house LAN with no double NAT) — at that point it no longer serves DHCP on the
-cable, so find it again with `python3 find_express.py`.
-
-**Safety:** do not leave a create-mode AP whose SSID+PMK match your real network. If the
-join fails back into AP mode, restore immediately:
-
-```sh
-python3 -m airportctl wifi restore backups/WiFi-<name>-<ts>.cfb --reboot
-```
-
-## What "extend" (repeater) would need
-
-`FUN_0068b0c8` registers the whole dynamic-WDS/proxy-STA framework —
-`wifi.dwds.sta.join`/`.leave`, `wifi.proxy.sta.discovery`/`.idle`, `wifi.proxysta.status`,
-`wifi.scan.request`/`.complete`, `wifi.wps.credentials`, plus the roam tunables
-`rssi_5ghz_prefer`, `rssi_roam_threshold`, `band_pref`, `join_timeout` — and the supplicant
-config generator emits `proxy_sta=1`, `ifsta=`, `proxysta_interfaces=`, `dwds_role=`,
-`wds_partner=` for VAP types 3 and 7. So repeater mode is real firmware, driven by the blob keys
-`dWDS` / `pSTA` on top of the same `raSt` gate. It is still Apple-to-Apple WDS on the other end,
-so it does not help with a third-party router: for "extend", the practical answer remains a separate
-Wi-Fi→Ethernet bridge feeding the Express's LAN port.
-
-## Tooling in this repo
-
-* `airportctl/mode.py` + `airportctl mode show | ctim | sharing | wan`:
-  * `mode show` — reads `ctim`/`waCV`/`raNA`/`raDS`/`raWB`/`waUB` plus per-radio `raSt`, prints
-    the computed role and exactly why join is or is not blocked.
-  * `mode ctim [now|N]` — stores the configuration timestamp (with read-back).
-  * `mode sharing {nat,dhcp,bridge}` — the three AirPort-Utility connection-sharing choices,
-    with the "you will lose 10.0.1.1" warning.
-  * `mode wan {wired,wireless,show}` — flips `waCV`'s uplink bit (only needed if `mode show`
-    ever reports role 6).
-* `airportctl/test_mode.py` — offline check of the role model against every firmware branch.
-* `ghidra_scripts/FindStore.java` — find stores to a struct offset, optionally with a given
-  immediate (how `ctx+0x24` was traced).
-* `ghidra_scripts/NameFuncs.java` — recovers **2310 real function names** from the `__func__`
-  strings ACPd passes to its lock/log wrappers. Run it on your own import and you get
-  `ACPGetPropertyDirect`, `ACPSetPropertyDirectEx`, `ACPPostProblemDirect`,
-  `ACPPropertyHandlerInstallDirect`, `ACPGetImportantProblemsString`, … back. Start here: it
-  makes everything else in this document far easier to follow.
-
-## Reference: the ACP property table
-
-`FUN_00807418` is the property lookup: a flat array of 12-byte records
-`{ fourcc, type, flags }` starting at VMA **0xc5af38**, terminated by a zero fourcc (520 records).
-`type`: 1=byte, 2=string, 5=uint32, 6=bool, 7=IPv4 addr, 8=MAC, 10=action, 12=IPv6, 13=data.
-`flags`: 0x04 = setprop needs the privileged flag, 0x08 = setprop needs auth, 0x20/0x40/0x80 =
-not directly get/settable (a registered handler owns it). Dump it with
-**`python3 tools/proptab.py /path/to/ACPd.bin [fourcc ...]`**:
+Gate properties as dumped by `tools/proptab.py`:
 
 ```
 0x00c5b34c  'raDS'   type=6  (bool    ) flags=0x00 -
@@ -384,23 +90,103 @@ not directly get/settable (a registered handler owns it). Dump it with
 0x00c5bdc0  'ctim'   type=5  (uint32  ) flags=0x00 -
 ```
 
-So every property the gate depends on is freely settable over ACP. (Note the *flat* `raSt`
-property is handler-only — irrelevant here, since `raSt` is set inside the `WiFi` blob.)
+(The flat `raSt` is handler-only; the gate reads `raSt` from the `WiFi` blob.)
 
-## Reproducing this
+## Firmware supplicant
 
-Every address above refers to `/sbin/ACPd` from **firmware 7.8.1** on an A1392, image base
-`0x00400000`. The binary is Apple's and is not distributed here — pull it off your own unit and
-import it as described in [extracting-acpd.md](extracting-acpd.md), then:
+| | |
+|---|---|
+| Binary | `/sbin/wpa_supplicant`, a link to the crunched megabinary; v0.6.5: no SAE, no PMF |
+| Started by | `FUN_00684e34` (after `FUN_0068b0c8` in every init/apply path), for VAP type 1 with radio flag 2: `/sbin/wpa_supplicant -K -M %s -F %s -D net80211 -i %s -c %s` |
+| Config (`FUN_006845e4`) | `ap_scan=1`, `network={ ssid="…", scan_ssid=1, mode=0 }`; `raWM` 5 → `proto=RSN pairwise=CCMP group=CCMP TKIP WEP104 key_mgmt=WPA-PSK` (3/8 WPA, 4/6/7 WPA+RSN, 1/2/9–12 WEP); `psk=` = `raWE` verbatim. VAP types 7/3 add `proxy_sta=1` / `wds_partner=` |
+| Result (L) | SIGSEGV at startup: `pc 0x005CA34C`, `badvaddr 0x4C`, `cause 0x08` (load); a zombie in `ps` |
+| Cause (F) | net80211 "add interface" fails (`Failed to add interface %s`; `eapol_sm_init` fails) → deinit → "Deinit Legacy WDS" (`FUN_005ca318`) dereferences `drv->0x90` (NULL) at `+0x4C` |
+| Scope (L) | config-independent: same crash with a config of only `ctrl_interface=`, against a hostap interface, and with `--psta` (VAP type 7) |
+| Diagnose | `ps`, `ifconfig wlan0`, `dmesg`; `/etc/wpa_supplicant*.conf` holds the PMK |
 
-```sh
-JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java)))) \
-/path/to/ghidra/support/analyzeHeadless "$PWD/ghidra_project" acpd \
-  -process ACPd.bin -readOnly -noanalysis \
-  -scriptPath "$PWD/ghidra_scripts" -postScript Decompile.java out/ 0x689ab8 0x65746c 0x684e34
-```
+The crash disassembles in any copy of the megabinary (image base `0x400000`):
+`mips-linux-gnu-objdump -d -EB -m mips:3000 --start-address=0x… ACPd.bin`.
 
-(`-process ACPd.bin` matters — without it headless picks no program and the scripts see `null`.)
-On a different firmware version the addresses will move; `ghidra_scripts/FindStr.java` and
-`ImmScan.java` re-find the anchors (the `ctim` fourcc `0x6374696d`, the string
-`"/sbin/wpa_supplicant -K -M %s -F %s -D net80211 -i %s -c %s"`).
+## Replacement supplicant
+
+Stock wpa_supplicant 0.7.3, cross-built with header shims and no source edits
+([crossdev/wpa-build](../crossdev/wpa-build/README.md): kernel ABI table, size, config). It
+runs on a station VAP created by hand and bypasses the gate; ACPd is never asked to join.
+
+| | |
+|---|---|
+| Interface | managed VAP `wlan2` on `ath0` (2.4 GHz). One VAP per radio: the hostap VAP must go first (`SIOCIFCREATE2: EIO` otherwise) |
+| Kernel caps (L) | `drivercaps=<STA,…,WPA1,WPA2,…,WDS,BGSCAN,…>`, `cryptocaps=<…,AES,AES_CCM,…>` |
+| Security | WPA2-PSK (CCMP) only; no SAE / WPA3, PMF, EAP |
+| Alongside | 5 GHz AP, Ethernet and ACPd keep running |
+| Topology | leaf: a 3-address station can't bridge other hosts, so the LAN port and the AP stay off the joined network; only the Express's own services move there |
+| AirPlay | `/sbin/airtunesd -i wlan2`: it registers `_raop` / `_airplay` only on its `-i` interface (default `bridge0`), and ACPd doesn't respawn it |
+| Secrets | only the PMK goes to the device; the passphrase stays on the client |
+| Persistence | `/mnt/Flash` holds the files (`airportctl join install`); the join itself is redone after each boot by `airportctl join start` or the [autorun](autorun.md) image |
+| Verified (L) | scan, association, 4-way handshake, GTK, traffic both ways, AirPlay playback on the joined network (third-party router) |
+
+### Join sequence
+
+As run by `airportctl/payload/autorun.sh` and `crossdev/wpa-build/join-test.sh`:
+
+1. `kill -STOP` ACPd; stop the 2.4 GHz `hostapd`; `ifconfig wlan0 destroy`;
+   `ifconfig wlan2 create wlandev ath0`.
+2. `ifconfig wlan2 up`, then `down`, then start the supplicant. Starting with the interface
+   **down** is required: 0.7.3's `driver_bsd` downs it during init, reads its own
+   `RTM_IFINFO` as "interface removed" and closes its EAPOL socket, after which it
+   associates but never sees 4-way message 1/4.
+3. `kill -CONT` ACPd (it leaves `wlan2` alone).
+4. Address: [DHCP](#addressing-dhcp) or fixed.
+5. Restart `airtunesd -i wlan2`.
+
+## Addressing (DHCP)
+
+| | |
+|---|---|
+| Address changes (L) | setting, aliasing, removing or replacing the IPv4 address on a keyed `wlan2` keeps the WPA keys; a lease is set on the live link |
+| Stock `/sbin/dhclient` | ISC dhclient 4.1.0 + Apple changes (`main` = `FUN_00556de0`), tied to ACPd: registers the `dhcp.client.*` RPCs, sends `dhcp.client.lease.accept` on every bind (`FUN_00554d84`, no flag to disable), exit hook runs `acp-update-network` and `dns-update-script`, `dhclient-script` sets `0.0.0.0` in `PREINIT`. Not used |
+| Own client | [`crossdev/src/dhcpc.c`](../crossdev/src/dhcpc.c): raw `/dev/bpf`, 120 KB static, one-shot; prints the lease as shell variables; never touches the interface, routes or `resolv.conf` |
+
+`autorun.sh` flow:
+
+1. Join with no address on `wlan2`.
+2. `dhcpc`: DISCOVER → OFFER → REQUEST → ACK (retransmits cover a handshake still running
+   after `status: associated`).
+3. Set the leased address on the live link, ping the router. Only if the router stays silent
+   ~10 s: re-key (freeze ACPd, stop the supplicant, set the address, `wlan2` down, restart the
+   supplicant).
+4. Move AirPlay; leave a renew loop running.
+
+| Behaviour | |
+|---|---|
+| Renew loop | at T1: unicast to the server, then broadcast, then a fresh DISCOVER; retries every minute; applies a changed address the same way. Follows T1/T2 from the original binding |
+| Routes, DNS | no default route, `resolv.conf` untouched (AirPlay needs only the local subnet) |
+| No server | `FALLBACK_IP` (+ `GW`, `MASK`) from `join.conf` if set, else the run fails (amber LED); 5 GHz AP and Ethernet stay up |
+| Conflicts | no ARP check, no DHCPDECLINE; use a reservation on the router for a stable address |
+| Files | log `/mnt/Memory/dhcp.log`, lease `/mnt/Memory/lease` |
+| Timing (L) | lease in ~3 s; `join start` to joined + leased ~61 s, of which 20 s is the post-boot settle wait |
+
+| Test | Covers |
+|---|---|
+| `crossdev/tests/dhcpc-test.sh` | `dhcpc` logic vs busybox `udhcpd` in a network namespace: INIT, INIT-REBOOT, unicast renew, broadcast rebind, NAK, timeout |
+| `tests/autorun-mock.sh` | `autorun.sh` order of operations with stubbed device commands |
+| On the A1392 (L) | all of the above against a real router; full `join install` → reboot → `join start`; renewal in place; power cycle |
+
+## Name on the network
+
+| | |
+|---|---|
+| Hostname | from `syNm`: "Base Station airPlay station" → `base-station-airplay-station` |
+| mDNS | mDNSResponder announces `<hostname>.local` on every interface, `wlan2` included |
+| DHCP | `dhcpc` sends the hostname as option 12 in DISCOVER and REQUEST |
+| Rename | `airportctl join install --name` / `airportctl name`: `syNm` is stored at once; hostname, `.local` and the `_airport._tcp` name change when ACPd starts at the next boot (L) |
+
+## Extend (repeater)
+
+Present in firmware, not tested. `FUN_0068b0c8` registers `wifi.dwds.sta.join` / `.leave`,
+`wifi.proxy.sta.discovery` / `.idle`, `wifi.proxysta.status`, `wifi.scan.request` /
+`.complete`, `wifi.wps.credentials` and the roam tunables `rssi_5ghz_prefer`,
+`rssi_roam_threshold`, `band_pref`, `join_timeout`. The supplicant config generator emits
+`proxy_sta=1`, `ifsta=`, `proxysta_interfaces=`, `dwds_role=`, `wds_partner=` for VAP types 3
+and 7. Driven by the blob keys `dWDS` / `pSTA` behind the same gate; the other end must be an
+Apple base station (Apple WDS).

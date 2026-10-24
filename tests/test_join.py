@@ -118,15 +118,17 @@ class UiAddress(unittest.TestCase):
 class Install(unittest.TestCase):
     def test_dry_run_dhcp(self):
         logged = []
-        join.install('10.0.1.1', 'pw', 'HomeWiFi', 'correct horse', dry_run=True,
-                     log=logged.append)
+        with mock.patch.object(join, 'check_device'):
+            join.install('10.0.1.1', 'pw', 'HomeWiFi', 'correct horse', dry_run=True,
+                         log=logged.append)
         self.assertIn('with an address from DHCP', logged[0])
         self.assertIn('dhcpc (', logged[1])
 
     def dry_run_name(self, name):
         logged = []
         with mock.patch.object(join.acp, 'get_name', return_value='Base Station airPlay station'), \
-                mock.patch.object(join.acp, 'set_name') as set_name:
+                mock.patch.object(join.acp, 'set_name') as set_name, \
+                mock.patch.object(join, 'check_device'):
             join.install('10.0.1.1', 'pw', 'HomeWiFi', 'correct horse', name=name, dry_run=True,
                          log=logged.append)
         set_name.assert_not_called()

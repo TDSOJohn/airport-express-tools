@@ -1,145 +1,58 @@
-# The A1392 hardware
+# Hardware
 
-A component-level reference for the 2012 dual-band AirPort Express (model **A1392**,
-Apple board codename **k31**). The chip identification here comes from published
-teardowns (credited at the end), above all Embedded Ideation's 2014 write-up. That
-write-up was the first to spot the SPI flash chip, which earlier teardowns missed, and it
-names the chip's five partitions. What this repo adds first-hand is the **live partition
-map**: each partition's size, its NetBSD device node, and what is actually stored in it
-on a 7.8.1 unit. The board photos on this page are our own macro shots (see
-[Photos](#photos)).
+Board-level data. SoC, RAM, radios and Ethernet for every measured model:
+[models.md § Platform](models.md#platform). Flash contents and boot: [boot.md](boot.md).
 
-For what the flash *does* at boot — the A/B firmware banks, CFE, the RAM-disk root, and
-the "no secure boot" finding — see [boot.md](boot.md). This page is the physical side.
+## A1392 (AirPort Express 2012, board k31)
 
-## Case access
+| Function | Part | Notes | Src |
+|---|---|---|---|
+| SoC + 2.4 GHz radio | Atheros AR9344 "Wasp", MIPS 74Kc, big-endian | NetBSD reports `hw.machine = ar7240` (AR934x reuses that platform code); CFE contains `WASP_BOOTSTRAP_REG` | E, F |
+| 5 GHz radio | Atheros AR9582, 2×2 | `ath1` / `wlan1`; does DFS | E, L |
+| RAM | 64 MB DDR2 | Hynix H5PS5162GFR (Rogue Amoeba) or Nanya NT5TU32M16DG-AC (Embedded Ideation); `hw.physmem = 67108864` | E, L |
+| Flash | Winbond W25Q128BV SPI-NOR, 128 Mbit = 16 MB | under an EMI-shield anchor; Embedded Ideation's caption reads "25Q129BVEG", likely a typo | E |
+| Audio DAC | AKM AK4430ET, 24-bit / 192 kHz | analog + optical (TOSLINK) out; optical jack-detect = ACP `auJD` | E, L |
+| Power | Delta 3.3 V DC / 2 A module, internal | board power via the two screw holes over the PSU, silkscreen `V0` / `GND` | E |
 
-The unit opens from the **bottom**: pry the white bottom panel off with a thin, flat tool
-worked around the seam. It's held by plastic tabs that snap and tend to break — a plastic
-spudger or putty knife spreads the load better than a screwdriver. The logic board lifts
-out once the panel and the power-supply module are clear; power reaches the board through
-the two screw-mount holes that overlap the PSU (silkscreened `V0` and `GND`).
+### Case
 
-Embedded Ideation's notes: release the **two tabs on the rear-port side** first, then the
-seven clips around the rest of the edge. The logic board is held by **Torx T8** screws,
-and the power-cord connector by two **Torx T6**. You don't need to take the board out to
-reach the debug header, though soldering to its pads is easier if you do.
+| | |
+|---|---|
+| Opening | from the bottom: pry off the white bottom panel (plastic tabs, fragile; use a spudger) |
+| Clip order | the two tabs on the rear-port side first, then the seven clips around the edge |
+| Screws | logic board: Torx T8; power-cord connector: 2 × Torx T6 |
+| Debug header | reachable with the board in place |
 
-<!-- ![A1392 with the bottom panel removed](images/case-open.jpg) -->
-*Photo to add — `images/case-open.jpg`: the unit with the bottom panel off.*
+### Debug header
 
-## Components
+Unpopulated pad cluster in the corner next to the audio jack, ~10 usable pads. Layout close
+to the TI 20-pin ARM JTAG connector, but the two pad columns are offset.
 
-| function | part | notes |
+| Signal | Detail | Src |
 |---|---|---|
-| **SoC / AP + 2.4 GHz radio** | Atheros **AR9344** ("Wasp") | MIPS **74Kc**, big-endian. NetBSD labels the platform `ar7240` (the AR934x family reuses that code); CFE's `WASP_BOOTSTRAP_REG` string confirms Wasp. |
-| **5 GHz radio** | Atheros **AR9582** | the second radio — `ath1`/`wlan1`; 2×2, does the DFS work seen in `dmesg`. |
-| **RAM** | 64 MB **DDR2** | reported as Hynix `H5PS5162GFR` (Rogue Amoeba) and Nanya `NT5TU32M16DG-AC` (Embedded Ideation) — same 64 MB, a second-sourced / board-revision difference. Matches `hw.physmem = 67108864`. |
-| **Flash** | **Winbond W25Q128BV** SPI-NOR, **128 Mbit = 16 MB** | identified by Embedded Ideation. It sits under an EMI-shield anchor; see below. |
-| **Audio DAC** | AKM **AK4430ET** | 24-bit / 192 kHz stereo — the analog + optical (TOSLINK) output; the optical jack-detect shows up as `auJD` over ACP. |
-| **Power** | Delta 3.3 VDC / 2 A module | internal PSU brick; earlier single-band units used a Samsung dual-output supply. |
+| UART | 115200 8N1, no flow control, 3.3 V; TX/RX pad order not published | E |
+| UART console | root shell with no authentication; a key during the ~1 s `BOOTDELAY` gives the [`CFE>` console](boot.md#cfe-console) | E |
+| EJTAG | `TDI`, `TDO`, `TCK`, `TMS`, `nTRST`, `nSRST`; `TDO` identified, the two resets not told apart | E |
+| Power | `VCC`, `GND` | E |
 
-<!-- ![Logic board, top, shields removed](images/board-top.jpg) -->
-*Photo to add — `images/board-top.jpg`: logic board, top side, RF cans removed, chips legible.*
+### Recovery paths
 
-<!-- ![Logic board, bottom](images/board-bottom.jpg) -->
-*Photo to add — `images/board-bottom.jpg`: board underside.*
+| Path | Needs |
+|---|---|
+| CFE console over the UART | header wiring; TFTP load and flash programming ([boot.md](boot.md#cfe-console)) |
+| EJTAG | header wiring and an EJTAG probe |
+| SPI programmer | the chip freed from the shield anchor, a clip (SOIC-8 assumed, unconfirmed), a `flashrom`-capable programmer at 3.3 V |
 
-## The flash chip
+No path is blocked by a signature check ([boot.md § Verification](boot.md#verification)).
 
-Rogue Amoeba's 2012 teardown reported **no flash chip** and guessed the firmware was
-baked into the CPUs. Embedded Ideation (2014) showed why: the chip is hidden under
-**one of the EMI-shield anchors**. With the anchor removed they found a **Winbond
-W25Q128BV**, a 128 Mbit (16 MB) SPI-NOR. Their photo caption
-reads "Winbond 25Q129BVEG", which is presumably a typo for a `25Q128BV…G` marking.
+## Other models
 
-Embedded Ideation also listed the chip's **five partitions** by their CFE names: `boot`
-(CFE), `scfg` (firmware version, radio calibration, device identifiers), `dcfg` (AirPort
-configuration and SSH host keys, mounted at `/mnt/Flash`), `primary` (the gzboot image),
-and `secondary` (a backup gzboot image). They gave no sizes or offsets.
-
-We read the sizes live. Over a read-only root session, `flashctl` and `sysctl` report
-five flash "disks" (`hw.disknames = flash0 flash1 flash2 flash3 flash4 md0`) that
-together sum to exactly 16 MB. Matching them to Embedded Ideation's names by content
-(every one lines up):
-
-| device | CFE name | size | role |
-|---|---|---:|---|
-| `flash0` | `primary` | 7 MB | firmware **bank A** |
-| `flash1` | `secondary` | 7 MB | firmware **bank B** (failover) |
-| `flash2` | `dcfg` | 1.25 MB | **`/mnt/Flash`**, the only persistent, writable filesystem |
-| `flash3` | `scfg` | 256 KB | **CFE nvram / factory data** (serial, MACs, radio calibration, region, `apple-minver`) |
-| `flash4` | `boot` | 512 KB | **Apple CFE bootloader** |
-
-The two 7 MB banks are why an interrupted firmware write is survivable — CFE checksums the
-primary and falls back to the secondary. `/` itself is not on flash at all: it's a ~11.5 MB
-FFS **RAM disk** (`md0`) unpacked from the active bank at boot, so only `flash2` persists.
-Full detail — sizes from `flashctl info`, the boot/verification flow, and the image format
-— is in [boot.md](boot.md).
-
-The Winbond part is also relevant for **off-board recovery**: a W25Q128BV can be read and
-written in place with a clip (assuming the SOIC-8 package; the photo will confirm) and a
-`flashrom`-capable programmer (SPI, 3.3 V). Given the lack of secure boot, that is a
-complete unbrick and custom-firmware path even without the serial header. To put a clip on it you first have to free the chip from the shield
-anchor.
-
-<!-- ![Flash chip markings](images/flash-chip.jpg) -->
-*Photo to add — `images/flash-chip.jpg`: macro of the SPI-NOR and the shield anchor over it, to check the marking (Embedded Ideation's caption looks like a typo).*
-
-## The debug header: serial + JTAG
-
-The board carries an **unpopulated debug header** in the corner **next to the audio jack**
-— exposed as soon as the bottom panel is off. It combines the console UART and the CPU's
-JTAG on one pad cluster (~10 usable pads: `VCC`, `GND`, UART ×2, EJTAG ×6). Its layout
-nearly matches the compact **TI 20-pin ARM JTAG** connector, but the two columns of pads
-are offset, so it isn't a drop-in fit.
-
-**Serial (UART):** two of the pads are the low-speed console.
-
-- **115200 baud, 8 data bits, no parity, 1 stop bit, no flow control** (8N1)
-- 3.3 V logic — an FT232RL-class USB-TTL adapter works
-- The published teardown doesn't label which pad is **TX** vs **RX**; probe with a scope or
-  logic analyser (our macro photo of the header, below, is meant to help pin the order).
-- **A root shell is available on the serial console immediately, with no authentication.**
-  Pressing a key during the ~1-second boot window drops you to the **`CFE>` bootloader
-  console** (see [boot.md](boot.md)). So *physical* access is unauthenticated root and full
-  bootloader control — independent of the `dbug`/SSH route in [dbug.md](dbug.md).
-
-**JTAG:** the other six pads are **MIPS EJTAG** — `TDI`, `TDO`, `TCK`, `TMS`, `nTRST`,
-`nSRST`. `TDO` was identified by GPIO/logic analysis in the referenced work; the two
-reset-type pads (`nTRST`/`nSRST`) weren't individually distinguished. EJTAG gives
-low-level halt/flash access — the belt-and-braces recovery path alongside serial.
-
-With serial + JTAG (or just an SPI programmer on the flash), and a backup of the five
-partitions taken first, the A1392 is effectively unbrickable.
-
-<!-- ![Debug header macro](images/debug-header.jpg) -->
-*Photo to add — `images/debug-header.jpg`: macro of the debug header by the audio jack, with pad positions visible (the key shot for mapping TX/RX and the EJTAG order).*
-
-## Photos
-
-The images referenced above are commented out until the files exist — drop a photo into
-`docs/images/` under the given name and uncomment the matching `<!-- ![…](…) -->` line.
-Most valuable shots, roughly in order:
-
-1. `debug-header.jpg` — the header, macro, pads sharp (for the pinout).
-2. `flash-chip.jpg` — the SPI-NOR marking and its position under the shield anchor.
-3. `board-top.jpg` — top side, RF cans off, all main chips legible.
-4. `board-bottom.jpg`, `case-open.jpg` — context shots.
-5. Optional macros of the AR9344, AR9582, and AK4430ET markings.
-
-Keep each image to a sensible size (long edge ~2000 px, ≲2 MB) so the repo stays light.
+No board-level data yet. Platform data from the running system: [models.md](models.md#platform).
 
 ## Sources
 
-- Embedded Ideation, *Dissecting the AirPort Express* (2014): the debug header, serial
-  console, EJTAG mapping, the chip identities, the discovery of the SPI flash (W25Q128BV,
-  under a shield anchor), and its five named partitions (`boot`/`scfg`/`dcfg`/`primary`/`secondary`):
+- Embedded Ideation, *Dissecting the AirPort Express* (2014): debug header, UART, EJTAG, chip
+  IDs, the SPI flash and its partition names.
   <https://www.embeddedideation.com/2014/03/dissecting-the-airport-express/>
-- Rogue Amoeba, *AirPort Express (Dual-Band) Disassembly* (2012): case teardown, board
-  photos, and most of the component list. It missed the flash chip.
+- Rogue Amoeba, *AirPort Express (Dual-Band) Disassembly* (2012): case, photos, component list.
   <https://weblog.rogueamoeba.com/2012/06/19/airport-express-disassembly/>
-
-The partition sizes, their NetBSD device mapping and contents, and the boot and
-verification behaviour in [boot.md](boot.md) are first-hand from an A1392 on firmware
-7.8.1. The chip itself and the partition names come from Embedded Ideation.
